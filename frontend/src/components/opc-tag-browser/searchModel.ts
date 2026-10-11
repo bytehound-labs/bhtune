@@ -114,19 +114,6 @@ export function noSearchMatchesMessage(
   }
 }
 
-export function indexBuildButtonLabel(
-  indexSearchAvailable: boolean,
-  state: OpcSearchIndexStatusResponse["state"] | undefined,
-): string {
-  if (indexSearchAvailable) return "Refresh index";
-  if (state === "failed") return "Retry build";
-  return "Build index";
-}
-
-export function autoRefreshButtonLabel(enabled: boolean): string {
-  return enabled ? "Disable auto-refresh" : "Enable auto-refresh";
-}
-
 export function autoRefreshErrorMessage(enabled: boolean): string {
   if (enabled) return "Unable to enable automatic index refresh.";
   return "Unable to disable automatic index refresh.";

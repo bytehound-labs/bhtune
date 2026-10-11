@@ -65,11 +65,17 @@ can never merge.
 For the OPC DA driver, the connection fields are presented in this order: Bridge host, OPC DA
 server ProgID, Tag name, then Notes.
 
-The tag browser's `Index: ready` status describes the usable index, independently of automatic
-refresh. `Auto-refresh: enabled` appears with the gateway-reported next-refresh countdown and
-exact-time tooltip. An opted-in server without a scheduled date shows `Auto-refresh: not scheduled`;
-a server that is not opted in shows `Auto-refresh: disabled`. Per-server toggles do not override
-gateway-wide scheduling policy.
+The tag browser's **Refresh Index** starts a manual first build or refresh without changing
+the saved auto-refresh choice. New/recreated indexes default off. **Enable Auto-refresh** and
+**Disable Auto-refresh** persist the selected server's choice across browser and gateway
+restarts; no gateway-wide opt-in override applies. Disable preserves cached search and an
+active build. **Cancel Indexing** stops a build; **Delete Index** requires confirmation.
+
+`Index: ready` describes the usable cache independently of automatic refresh.
+`Auto-refresh: enabled` and its countdown require a true choice and a reported next date;
+an enabled index without a date shows `Auto-refresh: not scheduled`. An opted-out index shows
+`Auto-refresh: disabled` and no countdown. Pacing, maintenance, health, and retry protections
+remain gateway safeguards.
 
 Built-in and catalog templates can't be edited through the UI — they're re-seeded from
 their source file on every server startup, so an edit would just be discarded — but they

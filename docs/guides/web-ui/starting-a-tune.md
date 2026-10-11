@@ -88,8 +88,8 @@ starts. The endpoint and action are not available in Demo mode.
 
 {/* web-ui-screenshot: full-opc-tag-browser */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=31a936ca2e44">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=31a936ca2e44" alt="BHTune hierarchical OPC tag browser with a selected tag and a successful quality read" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=2bf58bc3c28c">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=2bf58bc3c28c" alt="BHTune hierarchical OPC tag browser with a selected tag and a successful quality read" />
   </a>
   <figcaption>The tag browser expands one level at a time and reads the originally selected item before it is mapped into the loop.</figcaption>
 </figure>
@@ -102,7 +102,15 @@ displays its error again, including an identical message. Errors that were not d
 before closing are not acknowledged. Reloading or leaving the New Tune page resets this
 page-local acknowledgement; gateway history and API/CLI diagnostics are not cleared.
 
-The search-index controls also expose **Delete index** after a completed index build. Deletion
+New and recreated indexes start with automatic refresh off. **Refresh Index** starts a manual
+build or retry without changing that choice. Click **Enable Auto-refresh** to opt in explicitly;
+the saved choice survives browser and gateway restarts. **Disable Auto-refresh** stops future
+scheduling without deleting indexed data or cancelling an active build. Use **Cancel Indexing**
+to stop that build. An enabled index with a reported next date shows the days-and-hours
+countdown; without a date it shows `not scheduled`. An opted-out index shows no countdown.
+Gateway maintenance, health, pacing, and retry protections remain in effect.
+
+The search-index controls also expose **Delete Index** after a completed index build. Deletion
 is intentionally destructive: the first failed request leaves the index and enrollment intact,
 keeps the styled confirmation open, and shows an inline retryable error. Confirming again sends
 one new request without reopening the dialog; only a successful response closes it and changes
@@ -111,8 +119,8 @@ available after the index is removed.
 
 {/* web-ui-screenshot: full-opc-search-index-delete-confirmation */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=59b0f375dd9c">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=59b0f375dd9c" alt="BHTune failed OPC search-index deletion confirmation with an inline retry error" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=4435cd44c642">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=4435cd44c642" alt="BHTune failed OPC search-index deletion confirmation with an inline retry error" />
   </a>
   <figcaption>A failed index deletion keeps the exact confirmation copy open and retryable; the underlying index state is unchanged until the retry succeeds.</figcaption>
 </figure>

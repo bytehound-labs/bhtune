@@ -65,9 +65,13 @@ API rather than a tuning-quality badge. The main navigation, forms, and
 history table adapt to viewports at and below 1024 pixels. See the
 [Web UI guide](docs/guides/web-ui/overview.md).
 
-The OPC tag browser distinguishes a usable index from its automatic refresh schedule.
-An opted-in server without a gateway-reported refresh time shows `Auto-refresh: not scheduled`.
-Per-server refresh controls do not override the gateway's global scheduling policy.
+The OPC tag browser provides **Refresh Index**, **Cancel Indexing** during a build, and
+**Delete Index**, plus **Enable Auto-refresh** or **Disable Auto-refresh** for a usable index.
+New and recreated indexes start with automatic refresh off. Manual builds and retries do not
+change the saved choice; an explicit opt-in survives gateway restarts. Disabling it stops
+future scheduling without cancelling an active build or deleting cached tags.
+`Index: ready` describes cached search independently of scheduling. A days-and-hours countdown
+appears only for an enabled index with a gateway-reported next-refresh time.
 
 ## Safety
 

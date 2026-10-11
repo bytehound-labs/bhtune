@@ -90,10 +90,17 @@ post-merge:
     ds-sync-pull:
       run: |
         if command -v ds >/dev/null 2>&1 && [ -f .envsync.yaml ]; then
-          if rbw unlocked >/dev/null 2>&1; then
-            echo "Syncing .env from Bitwarden..."
-            ds sync || echo "ds sync reported an issue (see above); .env may need manual attention."
+          if ! command -v rbw >/dev/null 2>&1; then
+            echo "Skipping .env sync: rbw is unavailable."
+          elif rbw unlocked >/dev/null 2>&1; then
+            echo "Refreshing the local Bitwarden database..."
+            if rbw sync; then
+              echo "Syncing .env from Bitwarden..."
+              ds sync || echo "ds sync reported an issue (see above); .env may need manual attention."
+            else
+              echo "rbw sync failed; .env was not refreshed. Fix RBW access, then run 'rbw sync' and 'ds sync'."
+            fi
           else
-            echo "Skipping ds sync: rbw is locked. Run 'rbw unlock' then 'ds sync' manually if .env.example changed."
+            echo "Skipping .env sync: rbw is locked. Run 'rbw unlock', then 'rbw sync' and 'ds sync' after pulling."
           fi
         fi

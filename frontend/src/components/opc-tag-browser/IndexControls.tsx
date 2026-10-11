@@ -1,7 +1,6 @@
 import type { OpcSearchIndexStatusResponse } from "../../api/opc";
 import { formatExactTime, formatTimeUntil } from "../../lib/time";
 import { Button, LoadingStatus } from "../ui";
-import { autoRefreshButtonLabel, indexBuildButtonLabel } from "./searchModel";
 
 type IndexControlsProps = Readonly<{
   opcServer: string;
@@ -71,7 +70,7 @@ export function IndexControls({
           loading={refreshPending}
           onClick={onRefresh}
         >
-          {indexBuildButtonLabel(indexSearchAvailable, indexStatus?.state)}
+          Refresh Index
         </Button>
         {canCancelBuild && (
           <Button
@@ -80,7 +79,7 @@ export function IndexControls({
             disabled={controlPending}
             onClick={onCancel}
           >
-            Cancel build
+            Cancel Indexing
           </Button>
         )}
         {indexStatus?.state === "deleting" && (
@@ -101,7 +100,9 @@ export function IndexControls({
                   onSetAutoRefresh(!indexStatus.auto_refresh_enabled)
                 }
               >
-                {autoRefreshButtonLabel(indexStatus.auto_refresh_enabled)}
+                {indexStatus.auto_refresh_enabled
+                  ? "Disable Auto-refresh"
+                  : "Enable Auto-refresh"}
               </Button>
             )}
             <Button
@@ -111,7 +112,7 @@ export function IndexControls({
               disabled={deleteDisabled}
               onClick={onDelete}
             >
-              Delete index
+              Delete Index
             </Button>
           </>
         )}
@@ -137,7 +138,7 @@ export function IndexControls({
           <span
             title={
               indexStatus.auto_refresh_enabled && !nextRefreshAt
-                ? "This server is opted in, but the gateway has not reported a scheduled refresh. Gateway policy controls automatic scheduling."
+                ? "This server is enabled, but the gateway has not reported a scheduled refresh."
                 : undefined
             }
           >
