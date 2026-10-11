@@ -5,7 +5,7 @@ the [design notes index](README.md) for provenance.
 
 ## Scalable OPC browse/search integration
 
-The BHTune OPC integration targets the `opcda-bridge` 0.6 Rust API. The old flat, globally
+The BHTune OPC integration targets the published `opcda-bridge` 0.5 Rust API. The old flat, globally
 limited namespace model is not supported: `bhtune-driver` uses typed capabilities, bounded browse
 pages, opaque browse sessions/node keys/page tokens, exact ItemIDs, branch/item/branch-and-item
 node kinds, explicit session cleanup, and gateway-owned persistent indexed search. The HTTP API
@@ -99,15 +99,15 @@ metadata, namespace source, and warnings. The gateway's indexed-search extension
 with persistent-index state, progress, ranked exact matches, breadcrumbs, and `has_more`.
 `POST /api/opc/search-index/auto-refresh` persists the selected server's explicit choice.
 `auto_refresh_enabled` and the actual scheduler next-refresh date remain separate from an
-active build's foreground/health/operator pause. The public bridge structs use the 0.6 Rust
+active build's foreground/health/operator pause. The public bridge structs use the 0.5 Rust
 dependency line, while the restored preference field and controls retain the published
 indexed-search protocol 2 contract.
 `openapi.json` and `frontend/src/api/schema.d.ts` are regenerated from the route definitions.
 Indexing is an optional search accelerator with per-server enrollment owned by the gateway database.
 A fresh gateway has no enrolled servers; BHTune's tag browser can build an index for any exact
-ProgID returned by the gateway, without a TOML allow-list or restart. After a successful first
-build, the server is opted in to automatic refresh under the gateway's configurable seven-day
-policy; scheduling also requires its global indexing policy to permit automatic work.
+ProgID returned by the gateway, without a TOML allow-list or restart. New and recreated indexes
+start with automatic refresh off. After a usable index exists, the user can opt in explicitly
+with **Enable Auto-refresh**; a manual build or retry does not change that choice.
 The browser can retry, refresh, disable or re-enable automatic refresh, and delete an index while
 lazy browse, direct ItemID entry, live reads, and tuning remain independent of index state.
 Index-status failures are compact diagnostics rather than browse failures.
