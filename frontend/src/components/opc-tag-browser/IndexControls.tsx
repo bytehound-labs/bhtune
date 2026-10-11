@@ -50,11 +50,10 @@ export function IndexControls({
   const nextRefreshAt = indexStatus?.auto_refresh_enabled
     ? indexStatus.scheduler.next_refresh_at
     : null;
-  const autoRefreshLabel = indexStatus?.auto_refresh_enabled
-    ? nextRefreshAt
-      ? "enabled"
-      : "not scheduled"
-    : "disabled";
+  let autoRefreshLabel = "disabled";
+  if (indexStatus?.auto_refresh_enabled) {
+    autoRefreshLabel = nextRefreshAt ? "enabled" : "not scheduled";
+  }
 
   return (
     <div className="mb-3 space-y-2">
