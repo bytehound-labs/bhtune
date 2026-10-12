@@ -28,6 +28,3 @@ indent_style = tab
 
 [*.bash]
 indent_style = tab
-
-[scripts/aurpkg]
-indent_style = tab

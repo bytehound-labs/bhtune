@@ -24,7 +24,7 @@ These notes were preserved from the former long-form agent file so that rational
 | [demo-mode.md](demo-mode.md) | Public simulator Demo boundary and fixed limits. |
 | [testing.md](testing.md) | Simulator, Playwright, and release-matrix tests. |
 | [validation-golden-replay.md](validation-golden-replay.md) | Golden-master replay. |
-| [packaging-and-release.md](packaging-and-release.md) | Archives, Docker, deb/rpm, and AUR. |
+| [packaging-and-release.md](packaging-and-release.md) | Archives, Docker, and the Windows installer. |
 | [windows-installer.md](windows-installer.md) | NSIS installer and optional gateway. |
 | [docs-site-and-generated-docs.md](docs-site-and-generated-docs.md) | Docs site, rustdoc, and the docs agent. |
 | [ci-and-hardening.md](ci-and-hardening.md) | CI, security workflows, and API compatibility. |

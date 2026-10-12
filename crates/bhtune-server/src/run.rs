@@ -1,7 +1,6 @@
 //! The actual `bhtune-server` bootstrap-and-serve sequence, split out of `main.rs` so it can
-//! be driven either directly from an interactive console session or a systemd/launchd-managed
-//! foreground process, or from inside the
-//! Windows Service Control Manager's own callback thread (`crate::service`'s
+//! run interactively, as a systemd service, as an operator-configured launchd job, or inside
+//! the Windows Service Control Manager's own callback thread (`crate::service`'s
 //! `#[cfg(windows)]` glue), which needs its *own* shutdown trigger (an SCM Stop/Shutdown
 //! control event) instead of Ctrl+C/`SIGTERM`.
 //!

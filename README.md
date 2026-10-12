@@ -34,8 +34,8 @@ and Demo workflows.
 
 No stable `v0.1.0` release has been published. Prerelease and validation artifacts are not
 supported installs. See the [installation guide](docs/getting-started/installation.md) for
-source-build instructions, supported distribution details, Windows installer diagnostics, and
-recovery.
+source builds, release archives, Docker, manual Linux and macOS service setup, Windows installer
+diagnostics, and recovery.
 
 The Windows distribution uses an NSIS installer for the CLI and web server, with an optional
 verified OPC DA gateway component. Installer validation covers external SQLite databases and

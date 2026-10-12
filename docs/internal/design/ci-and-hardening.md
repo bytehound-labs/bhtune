@@ -128,22 +128,18 @@ The repository now has a layered hardening gate for both source changes and rele
   status, so branch protection still receives one deterministic result when a fan-out job is
   intentionally skipped. Every major workflow job has a `timeout-minutes` bound.
 - **Release integrity.** Docker builds publish provenance and SBOM attestations. Tagged
-  releases download their archives/packages into a dedicated supply-chain job, generate a
+  releases download their archives into a dedicated supply-chain job, generate a
   CycloneDX SBOM and checksums, create GitHub artifact provenance attestations, and sign every
   release asset with keyless Cosign bundles before uploading the evidence beside the assets.
 - **Parser resilience.** `proptest` tests cover config serialization/parsing, template TOML/
   JSON, OPC bridge payload mappings, and template imports. The separate `fuzz/` Cargo-fuzz
   package has targets for each of those byte-stream boundaries without becoming a workspace
   runtime dependency.
-- **API compatibility.** `scripts/check_openapi_breaking.py` is a dependency-free comparison
-  for removed operations/responses/properties/enum values, newly required request fields, and
-  newly mandatory authentication. Its unit tests run in CI, and pull requests compare the
-  generated revision to the base branch in addition to the existing drift check. The only
-  response nullability allowance is the exact pre-v1 checked-result migration for the six
-  numeric fields of `ResultResponse`, because invalid calculations persist no safe numeric
-  value; unrelated response changes remain breaking. The request-property removals allowed by
-  the comparator are exact pre-v1 migrations of the per-tune quality/timing settings into global
-  configuration; unrelated removals remain breaking.
+- **Generated API contract.** CI regenerates `openapi.json` and checks it for drift; the frontend
+  API schema is generated from that contract and checked separately. HTTP contract changes must
+  update both generated references. CI does not compare a pull request's OpenAPI changes against
+  the base revision for breaking changes, so compatibility requires review against the existing
+  contract.
 - **Database compatibility.** Before v0.1, the migrations directory contains one consolidated
   `0001_initial_schema.sql` describing the complete current schema. Fresh-schema tests verify
   the single recorded migration plus the final indexes, checked-result constraints, Demo

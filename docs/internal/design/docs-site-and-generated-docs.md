@@ -39,9 +39,9 @@ name` needs an owned `String` converted `impl Into<clap::builder::Str>`, which o
   behind clap's `string` feature (not otherwise used by this crate, and not worth enabling
   workspace-wide for one codegen example) — `gen_docs.rs` instead leaks the short-lived
   recursion-computed name strings (`Box::leak`), which is fine for a one-shot process that
-  exits immediately after writing its output. These pages are what will let `pkg-aur` install
-  real content into `/usr/share/man/man1/` instead of shipping a binary with no man page at
-  all.
+  exits immediately after writing its output. These pages keep the command and subcommand
+  reference available in standard `man` format; release archives contain the binaries and
+  product documentation.
 - **`completions/bhtune.bash`, `completions/_bhtune` (zsh), `completions/bhtune.fish`** — via
   `clap_complete::generate`, one file per shell using each shell's own conventional completion
   file name.

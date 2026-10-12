@@ -10,13 +10,6 @@ one exists. Until then, run the published Docker image or build from source. The
 contains the Windows NSIS installer workflow and validation sources; a stable release will attach
 the resulting installer beside the matching Windows archive.
 
-Linux package definitions are prepared for the stable release but are not publicly installable
-until that release's assets exist. The Debian/Ubuntu and RPM packages are produced by the release
-packaging jobs; the `bhtune-bin` AUR metadata is generated and validated by
-`.github/workflows/aur-publish.yml`, with publication restricted to an exact stable `vX.Y.Z`
-tag. Prereleases and arbitrary refs are validation-only, and the first AUR publication is a
-manual post-release step.
-
 ## Choose and verify a distribution path
 
 Before installing a stable release asset, use the
@@ -29,15 +22,12 @@ Do not treat a successful health check as evidence that a live plant is safe to 
 | --------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | Windows NSIS    | `bhtune-vX.Y.Z-windows-x86_64-installer.exe` after stable release activation | `BhtuneServer` (`LocalService`); optional `OpcdaBridgeGateway` (`LocalSystem`) | `%ProgramData%\ByteHound\bhtune\`, including optional gateway state |
 | Windows archive | Windows release archive                                                      | Manual SCM registration, `LocalSystem`                                         | Explicit `--config` path recommended                                |
-| Arch            | `bhtune-bin` after the first verified AUR publication                        | systemd, `DynamicUser`                                                         | `/etc/bhtune`, `/var/lib/bhtune`                                    |
-| Debian/Ubuntu   | `.deb` from the stable release                                               | systemd, `DynamicUser`                                                         | `/etc/bhtune`, `/var/lib/bhtune`                                    |
-| RPM Linux       | `.rpm` from the stable release                                               | systemd, `DynamicUser`                                                         | `/etc/bhtune`, `/var/lib/bhtune`                                    |
 | Portable Linux  | Linux release archive                                                        | Manual systemd unit or foreground process                                      | Operator-selected paths                                             |
-| macOS           | Apple Silicon release archive                                                | Supplied launchd LaunchDaemon or foreground process                            | `/usr/local/etc/bhtune`, `/usr/local/var/bhtune`                    |
+| macOS           | Apple Silicon release archive                                                | Operator-configured launchd service or foreground process                     | Operator-selected paths                                             |
 | Docker          | GHCR `edge` or stable version tag                                            | Container process                                                              | Docker volume at `/var/lib/bhtune`                                  |
 
-The NSIS installer, AUR package, and stable package assets are prepared in the repository but are
-not publicly installable until the first stable release and its publication steps are complete.
+The Windows NSIS installer workflow validates the installer, but its stable-release asset is not
+available until release activation.
 
 ## Windows NSIS installer
 
@@ -96,80 +86,7 @@ retain the previous archive for rollback, and treat the database plus `-wal`/`-s
 copy unit. `bhtune-server.exe uninstall` removes the manual service but does not delete the
 operator's config or database.
 
-## Linux packages
-
-The `.deb`, `.rpm`, and `bhtune-bin` packages install the `bhtune` CLI, `bhtune-server`,
-generated man pages, shell completions, and the canonical `/usr/bin/bhtune-server` systemd unit.
-They reload systemd metadata but do not enable or start the service. Enable it explicitly after
-verifying the configuration:
-
-```sh
-sudo systemctl enable --now bhtune-server
-curl --fail http://127.0.0.1:8787/api/health
-bhtune simulate --output json > /tmp/bhtune-simulator.json
-```
-
-The package-managed unit uses `DynamicUser=true`, `/etc/bhtune` for configuration, and
-`/var/lib/bhtune` for the database and logs. It binds to localhost by default and does not
-create firewall rules. Use `systemctl status bhtune-server` and
-`journalctl -u bhtune-server -f` for service diagnostics. Upgrades preserve configuration,
-database, logs, and the service's running/stopped state; keep one known-good package and a
-separate database backup for rollback. Removal preserves `/etc/bhtune` and `/var/lib/bhtune`,
-including SQLite sidecars.
-
-### Arch Linux (`bhtune-bin`)
-
-After the first stable release and verified AUR publication:
-
-```sh
-git clone https://aur.archlinux.org/bhtune-bin.git
-cd bhtune-bin
-makepkg -si
-sudo systemctl enable --now bhtune-server
-curl --fail http://127.0.0.1:8787/api/health
-```
-
-The package uses `/usr/bin`, installs the unit at
-`/usr/lib/systemd/system/bhtune-server.service`, and never compiles Rust or the frontend. For
-an upgrade, review the generated `PKGBUILD`/`.SRCINFO`, keep the service state in mind, and
-retain the previous package until the new version passes its health and simulator checks. The
-repository's generator validates exact tagged sources and checksums; `.SRCINFO` is generated by
-non-root `makepkg --printsrcinfo`, never hand-written. Dry-run workflow validation never
-publishes to AUR. Verify the exact remote commit after the first publication as described in the
-[release-verification guide](../guides/release-verification.md#9-verify-the-aur-commit).
-
-### Debian or Ubuntu (`.deb`)
-
-After a stable release, verify the matching `.deb` and install it:
-
-```sh
-sudo apt install ./bhtune_<version>_amd64.deb
-sudo systemctl enable --now bhtune-server
-curl --fail http://127.0.0.1:8787/api/health
-```
-
-The Debian metadata uses `depends = "$auto"` so shared-library requirements come from the actual
-binaries through `dpkg-shlibdeps`. A package built on a non-Debian host with an empty
-`Depends:` field is not authoritative; do not replace adaptive dependency discovery with a
-hand-copied list. To roll back, stop or downgrade with the prior verified `.deb`, then recheck
-the health endpoint and preserve the database backup.
-
-### RPM-based Linux
-
-After a stable release, verify and install the matching RPM:
-
-```sh
-sudo dnf install ./bhtune-<version>-1.x86_64.rpm
-sudo systemctl enable --now bhtune-server
-curl --fail http://127.0.0.1:8787/api/health
-```
-
-The RPM declares its systemd requirement and reloads systemd metadata through package lifecycle
-scripts. `systemctl try-restart` preserves a stopped service during upgrades; final removal
-stops/disables the service but preserves configuration, database, SQLite sidecars, and logs.
-Keep the prior RPM and a separate database backup until the new version is accepted.
-
-## Portable Linux release archive
+## Linux release archive
 
 Verify and extract the stable `x86_64-unknown-linux-gnu` archive into a versioned directory,
 then install the binaries and the separate manual systemd unit:
@@ -181,58 +98,35 @@ sudo tar -xzf bhtune-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz \
   -C /opt/bhtune/X.Y.Z
 sudo install -m755 /opt/bhtune/X.Y.Z/bhtune /usr/local/bin/bhtune
 sudo install -m755 /opt/bhtune/X.Y.Z/bhtune-server /usr/local/bin/bhtune-server
-curl --fail --location --output /tmp/bhtune-server.service \
+curl --fail --location --output bhtune-server.service \
   "https://raw.githubusercontent.com/bytehound-labs/bhtune/$tag/packaging/systemd/manual/bhtune-server.service"
-sudo install -Dm644 /tmp/bhtune-server.service \
+systemd-analyze verify bhtune-server.service
+sudo install -Dm644 bhtune-server.service \
   /etc/systemd/system/bhtune-server.service
-rm -f /tmp/bhtune-server.service
+rm -f bhtune-server.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now bhtune-server
 curl --fail http://127.0.0.1:8787/api/health
 ```
 
 The release archive contains the binaries and product documentation, but not service-manager
-templates. Fetch the manual unit from the same immutable release tag as the archive, inspect it
-before installation, and then use it as shown above. The manual unit uses
-`/usr/local/bin/bhtune-server`, `DynamicUser=true`,
-`/etc/bhtune`, and `/var/lib/bhtune`; it is intentionally separate from package-managed units.
-Keep the previous versioned directory and binary until health and simulator checks pass. A
+templates. Fetch the manual unit from the same immutable release tag as the archive, verify and
+inspect it before installation, and then use it as shown above. This is the supplied Linux
+systemd unit: it uses `/usr/local/bin/bhtune-server`, `DynamicUser=true`, `/etc/bhtune`, and
+`/var/lib/bhtune`. Keep the previous versioned directory and binaries until health and simulator
+checks pass. A
 rollback is a service stop, replacement of the two `/usr/local/bin` binaries with the previous
-verified pair, followed by `systemctl start` and a health check. Package removal semantics do
-not apply to this path: remove only files you installed, and preserve the data directories
+verified pair, followed by `systemctl start` and a health check. Remove only files you installed,
+and preserve the data directories
 unless a separately verified backup and explicit destructive decision exist.
 
 ## macOS release archive
 
-The release matrix currently provides an Apple Silicon archive. Verify and extract it, install
-the server under `/usr/local/bin`, and use the supplied LaunchDaemon template:
-
-```sh
-tag=vX.Y.Z
-sudo install -m755 bhtune /usr/local/bin/bhtune
-sudo install -m755 bhtune-server /usr/local/bin/bhtune-server
-sudo mkdir -p /usr/local/etc/bhtune /usr/local/var/bhtune /usr/local/var/log
-curl --fail --location --output /tmp/com.bytehound-labs.bhtune-server.plist \
-  "https://raw.githubusercontent.com/bytehound-labs/bhtune/$tag/packaging/launchd/com.bytehound-labs.bhtune-server.plist"
-sudo install -m644 /tmp/com.bytehound-labs.bhtune-server.plist \
-  /Library/LaunchDaemons/
-rm -f /tmp/com.bytehound-labs.bhtune-server.plist
-sudo launchctl bootstrap system \
-  /Library/LaunchDaemons/com.bytehound-labs.bhtune-server.plist
-curl --fail http://127.0.0.1:8787/api/health
-```
-
-The release archive contains the binaries and product documentation, but not the LaunchDaemon
-template. Fetch the plist from the same immutable release tag as the archive and inspect it
-before installation. The LaunchDaemon runs at boot and restarts the server, stores configuration under
-`/usr/local/etc/bhtune`, data under `/usr/local/var/bhtune`, and bootstrap/panic output under
-`/usr/local/var/log`. On Apple Silicon Homebrew-style layouts, adjust the plist's binary path
-consistently if `/opt/homebrew` is preferred. Inspect it with
-`sudo launchctl print system/com.bytehound-labs.bhtune-server`; stop it with
-`sudo launchctl bootout system/com.bytehound-labs.bhtune-server`. For an upgrade, boot it out,
-retain the previous binary, replace both binaries as one versioned pair, bootstrap again, and
-run the health and simulator checks. There is no package-managed rollback or data deletion;
-preserve `/usr/local/var/bhtune` explicitly.
+The release matrix provides an Apple Silicon archive. Verify and extract it, then
+install both binaries in an operator-selected location. `bhtune-server` runs in the foreground
+when launched directly. BHTune does not ship a launchd plist or provide macOS service
+registration; a launchd service must be configured and maintained by the operator. Choose the
+binary, configuration, data, and log paths explicitly for that service.
 
 ## Run via Docker
 
@@ -557,15 +451,15 @@ regardless of which account the SCM happens to run it as.
 
 ```sh
 sudo install -m755 target/release/bhtune-server /usr/local/bin/bhtune-server
-sudo install -Dm644 packaging/systemd/bhtune-server.service \
+sudo install -Dm644 packaging/systemd/manual/bhtune-server.service \
     /etc/systemd/system/bhtune-server.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now bhtune-server
 ```
 
-The provided [`packaging/systemd/bhtune-server.service`](https://github.com/bytehound-labs/bhtune/blob/main/packaging/systemd/bhtune-server.service)
+The provided [`packaging/systemd/manual/bhtune-server.service`](https://github.com/bytehound-labs/bhtune/blob/main/packaging/systemd/manual/bhtune-server.service)
 unit uses `DynamicUser=true` (an ephemeral, unprivileged account systemd creates for the
-service's lifetime — no separate `useradd` step) plus `StateDirectory=`/
+service's lifetime — no separate user-creation step) plus `StateDirectory=`/
 `ConfigurationDirectory=` so the database and logs live at `/var/lib/bhtune/` and an optional
 config file at `/etc/bhtune/bhtune.toml`, both owned correctly with no manual `chown` needed.
 Unlike the Windows service above, this sidesteps the per-account path problem entirely — a
@@ -573,24 +467,12 @@ systemd-managed service's environment is set once, in the unit file itself, not 
 whichever user happens to be logged in. Check on it with `systemctl status bhtune-server` and
 `journalctl -u bhtune-server -f`; stop it with `sudo systemctl disable --now bhtune-server`.
 
-### macOS (launchd)
+### macOS (operator-configured launchd)
 
-```sh
-sudo install -m755 target/release/bhtune-server /usr/local/bin/bhtune-server
-sudo mkdir -p /usr/local/etc/bhtune /usr/local/var/bhtune /usr/local/var/log
-sudo install -m 644 packaging/launchd/com.bytehound-labs.bhtune-server.plist \
-    /Library/LaunchDaemons/
-sudo launchctl bootstrap system /Library/LaunchDaemons/com.bytehound-labs.bhtune-server.plist
-```
-
-The provided [`packaging/launchd/com.bytehound-labs.bhtune-server.plist`](https://github.com/bytehound-labs/bhtune/blob/main/packaging/launchd/com.bytehound-labs.bhtune-server.plist)
-registers a LaunchDaemon (not a per-user LaunchAgent, since this is a network service that
-should run regardless of login state) pointed at the Homebrew-style `/usr/local/etc`/
-`/usr/local/var` paths (Apple Silicon Homebrew installs use `/opt/homebrew` instead — adjust
-the binary path in the plist to match). Check on it with
-`sudo launchctl print system/com.bytehound-labs.bhtune-server` and
-`tail -f /usr/local/var/log/bhtune-server.log`; stop and unload it with
-`sudo launchctl bootout system/com.bytehound-labs.bhtune-server`.
+BHTune does not include a launchd plist. For a background service, create and maintain an
+operator-owned launchd configuration with explicit binary, configuration, data, and log paths.
+See the [macOS release archive](#macos-release-archive) section; direct invocation runs in the
+foreground.
 
 ## Next steps
 
@@ -603,4 +485,4 @@ the binary path in the plist to match). Check on it with
 - [Safety guide](../guides/safety.md) — live-loop guardrails, database boundaries, and recovery
   requirements.
 - [Release verification](../guides/release-verification.md) — checksums, Sigstore, provenance,
-  SBOM, installer, and AUR evidence.
+  SBOM, and installer evidence.

@@ -448,36 +448,17 @@ Grant only the minimum access required for the service, and independently back u
 before acknowledging the override. The optional gateway runs separately as `LocalSystem`,
 matching the upstream native OPC DA/DCOM service contract.
 
-Linux packages preserve `/etc/bhtune` and `/var/lib/bhtune` across upgrades and removal; they do
-not silently delete operator data. Docker deployments have the same boundary through the mounted
-`/var/lib/bhtune` volume. For every packaging path, stop the service before copying or restoring a
-SQLite database and keep the database, `-wal`, and `-shm` files together. Package installers do
-not create firewall rules or widen BHTune's loopback bind. The optional Windows gateway retains
-its explicit all-interface bind without adding a firewall rule. Windows uninstall uses a guarded
-two-pass cleanup: ProgramData, gateway configuration/index/logs, installer recovery state, and
-operator data remain in place, while ownership metadata is removed only after the fixed Program
-Files tree has been independently verified absent.
-
-The Debian, RPM, and Arch package units are package-managed variants of the same hardened
-systemd service and use `/usr/bin/bhtune-server`; the manual archive unit is separate and uses
-`/usr/local/bin/bhtune-server`. Installing any package reloads systemd metadata but does not
-enable or start BHTune. Operators must explicitly run `sudo systemctl enable --now
-bhtune-server` after reviewing the configuration. Package upgrades preserve the previous
-service state, and package removal preserves `/etc/bhtune`, `/var/lib/bhtune`, SQLite sidecars,
-and logs rather than treating them as disposable payload files.
-
-Debian package dependency metadata is intentionally adaptive: `cargo-deb` uses
-`depends = "$auto"` and relies on `dpkg-shlibdeps` in a Debian-capable packaging environment.
-An empty `Depends:` field from a host that lacks that tool is an incomplete packaging result, not
-evidence that the runtime has no shared-library requirements. Do not install such an artifact
-without rebuilding it in the supported Debian environment or independently verifying its
-dependencies.
-
-The Arch `bhtune-bin` package is generated from exact stable release inputs and is not a live
-source build. Its publication workflow rejects prerelease and arbitrary refs, validates every
-source checksum, builds as a non-root Arch user, and never enables or starts the service during
-package installation. Until the first stable release and manual AUR publication exist, use the
-workflow only for validation; do not present `bhtune-bin` as an available public package.
+The Linux release archive is installed and upgraded manually; stop the server before replacing
+binaries or copying/restoring its SQLite database. The supplied systemd unit uses
+`/usr/local/bin/bhtune-server`, stores configuration under `/etc/bhtune` and state under
+`/var/lib/bhtune`, and does not enable itself. Operators explicitly enable the service after
+reviewing its configuration. Docker deployments keep data in the mounted `/var/lib/bhtune`
+volume. For every installation method, keep the SQLite database and its `-wal`/`-shm` files
+together. BHTune does not create firewall rules or widen its loopback bind. The optional Windows
+gateway retains its explicit all-interface bind without adding a firewall rule. Windows uninstall
+uses a guarded two-pass cleanup: ProgramData, gateway configuration/index/logs, installer recovery
+state, and operator data remain in place, while ownership metadata is removed only after the fixed
+Program Files tree has been independently verified absent.
 
 The Windows installer is not Authenticode-signed. SmartScreen may therefore warn about the
 publisher even when the file is intact. Verify the release checksum and, when available, the

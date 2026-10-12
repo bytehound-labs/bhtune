@@ -43,16 +43,16 @@ different installation methods.
 | ------------------------ | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | Windows NSIS             | `%ProgramFiles%\ByteHound\bhtune\bhtune-server.exe`; services `BhtuneServer` and optional `OpcdaBridgeGateway` | `%ProgramData%\ByteHound\bhtune\bhtune.toml`; gateway config under `gateway\` | `%ProgramData%\ByteHound\bhtune\data\`, `logs\`, and optional `gateway\` |
 | Windows manual archive   | The path chosen by the operator; service registration uses the binary's `install` command                      | The path passed to `--config`, if any                                         | The configured/default user data directory                               |
-| Arch, Debian/Ubuntu, RPM | `/usr/bin/bhtune-server`; `bhtune-server.service`                                                              | `/etc/bhtune/`                                                                | `/var/lib/bhtune/`, including `logs/`                                    |
-| macOS archive            | `/usr/local/bin/bhtune-server` unless the archive was installed elsewhere                                      | `/usr/local/etc/bhtune/` for the supplied LaunchDaemon template               | `/usr/local/var/bhtune/` and `/usr/local/var/log/`                       |
+| Linux archive             | `/usr/local/bin/bhtune-server`; manual `bhtune-server.service`                                                 | `/etc/bhtune/`                                                                | `/var/lib/bhtune/`, including `logs/`                                    |
+| macOS archive             | Operator-selected binary path; foreground or operator-managed launchd                                         | Operator-selected config path                                                | Operator-selected data and log paths                                     |
 | Docker                   | `/usr/local/bin/bhtune-server` inside the container                                                            | Environment variables or a mounted config                                     | The mounted `/var/lib/bhtune` volume                                     |
 
 The Windows NSIS BHTune service runs as `NT AUTHORITY\LocalService`. Its optional
 `OpcdaBridgeGateway` service runs as `LocalSystem`, matching the upstream native OPC DA/DCOM
 service contract. The manual Windows `bhtune-server.exe install` path also runs BHTune as
-`LocalSystem`; it is a separate operating model. The package-managed Linux unit uses
-`DynamicUser=true`; the supplied macOS LaunchDaemon runs as root because no dedicated launchd
-service account is provisioned.
+`LocalSystem`; it is a separate operating model. The manual Linux systemd unit uses
+`DynamicUser=true`. BHTune does not ship a macOS launchd plist; an operator-created service uses
+the account and paths defined by that configuration.
 
 ## 3. Service control and logs
 
@@ -114,7 +114,7 @@ sudo journalctl -u bhtune-server -n 100 --no-pager
 curl --fail http://127.0.0.1:8787/api/health
 ```
 
-For the package-managed unit, inspect the effective service definition and identity:
+For the manual systemd unit, inspect the effective service definition and identity:
 
 ```sh
 systemctl cat bhtune-server
@@ -125,23 +125,12 @@ systemctl show bhtune-server \
 The application log directory is normally `/var/lib/bhtune/logs/`. The journal is still the
 first place to look for service-manager failures that occur before application logging starts.
 
-### macOS LaunchDaemon
+### macOS operator-managed launchd
 
-```sh
-sudo launchctl print system/com.bytehound-labs.bhtune-server
-sudo launchctl kickstart -k system/com.bytehound-labs.bhtune-server
-sudo launchctl bootout system/com.bytehound-labs.bhtune-server
-sudo launchctl bootstrap system \
-  /Library/LaunchDaemons/com.bytehound-labs.bhtune-server.plist
-curl --fail http://127.0.0.1:8787/api/health
-```
-
-Inspect both the application log and launchd's early-startup capture:
-
-```sh
-tail -n 100 /usr/local/var/log/bhtune-server.log
-tail -n 100 /usr/local/var/log/bhtune-server.error.log
-```
+BHTune does not ship a launchd plist. Use `launchctl` with the service label, plist location, and
+log paths from the operator-owned configuration. See the
+[installation guide](../getting-started/installation.md#macos-release-archive) for the available
+macOS service model.
 
 ### Docker
 
@@ -366,7 +355,7 @@ recovery is confirmed, and the history delete action refuses to remove them.
 ## 11. Upgrade, rollback, and removal
 
 Before any upgrade, capture the current version, service state, configuration, database
-backup, and health response. Keep one known-good package or archive available.
+backup, and health response. Keep one known-good installer or archive available.
 
 - **Windows NSIS:** the installer validates ownership of both managed services and TCP `7600`,
   preserves each service's previous state, keeps one verified rollback backup, and transiently
@@ -375,17 +364,15 @@ backup, and health response. Keep one known-good package or archive available.
   upgrade continues to manage it. The rollback snapshot includes the complete gateway
   ProgramData subtree. An external BHTune database is outside the automatic backup boundary
   and requires `/CUSTOM_DB_BACKUP_CONFIRMED=1` only after an independent backup.
-- **Arch/Debian/RPM:** package upgrades preserve `/etc/bhtune` and `/var/lib/bhtune`; the
-  package-managed unit uses `/usr/bin/bhtune-server`. A running service may be restarted by
-  package lifecycle scripts, while a stopped service remains stopped.
 - **Manual archives:** replace binaries only while the service is stopped, keep the prior
-  archive, and validate the health endpoint before restoring the prior service state.
+  archive, and validate the health endpoint before restoring the prior service state. For Linux,
+  use the supplied manual systemd unit; macOS launchd configuration is operator-managed.
 - **Docker:** pull the candidate image, stop the old container, recreate it with the same
   `/var/lib/bhtune` volume and environment, then validate health and the simulator. Do not
   remove the volume during an image upgrade.
 
 If health validation or rollback validation fails, leave the service stopped, preserve the
-installer/package logs and database backup, and escalate with the exact version, service
+installer/archive logs and database backup, and escalate with the exact version, service
 definition, API response, and log output. Do not retry repeatedly against a live loop.
 
 Normal removal deletes package or installer payloads but preserves operator data. Windows

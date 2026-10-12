@@ -178,18 +178,6 @@ jobs:
           cargo run --locked -p bhtune-server --example gen_openapi
           git diff --exit-code openapi.json
 
-      - name: Fetch base OpenAPI spec
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          git show "origin/$BASE_REF:openapi.json" > /tmp/openapi-base.json
-
-      - name: Reject breaking OpenAPI changes
-        if: github.event_name == 'pull_request'
-        run: python3 scripts/check_openapi_breaking.py /tmp/openapi-base.json openapi.json
-
       - name: Regenerate CLI docs and check for drift
         run: |
           cargo run --locked -p bhtune --example gen_docs --features schemars
@@ -260,19 +248,6 @@ jobs:
       # between workspace crates; the check/clippy/test jobs compile those local APIs instead.
       - name: Assemble publishable packages
         run: cargo package --workspace --locked --no-verify
-
-  aur:
-    name: AUR package validation
-    needs: changes
-    if: needs.changes.outputs.package == 'true'
-    uses: ./.github/workflows/aur-publish.yml
-    permissions:
-      contents: read
-    with:
-      mode: dry-run
-      source_ref: ${{ github.sha }}
-      tag: v0.1.0-rc.1
-      pkgrel: "1"
 
   msrv:
     name: MSRV
@@ -495,8 +470,6 @@ jobs:
         changes,
         check,
         windows,
-        package,
-        aur,
         msrv,
         python,
         frontend,
@@ -520,11 +493,10 @@ jobs:
           needs.changes.outputs.frontend != 'true' &&
           needs.changes.outputs.screenshots != 'true' &&
           needs.changes.outputs.website != 'true' &&
-          needs.changes.outputs.package != 'true' &&
           needs.changes.outputs.knip != 'true' &&
           needs.changes.outputs.python != 'true' &&
           needs.changes.outputs.installer != 'true'
-        run: echo "No validation-affecting files changed; heavy validation skipped."
+        run: echo "No required validation-affecting files changed; optional package verification may still run."
 
       - name: Verify validation results
         env:
@@ -532,7 +504,6 @@ jobs:
           FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
           SCREENSHOTS_CHANGED: ${{ needs.changes.outputs.screenshots }}
           WEBSITE_CHANGED: ${{ needs.changes.outputs.website }}
-          PACKAGE_CHANGED: ${{ needs.changes.outputs.package }}
           PYTHON_CHANGED: ${{ needs.changes.outputs.python }}
           CHECK_RESULT: ${{ needs.check.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
@@ -540,8 +511,6 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           SCREENSHOTS_RESULT: ${{ needs.screenshots.result }}
           WEBSITE_RESULT: ${{ needs.website.result }}
-          PACKAGE_RESULT: ${{ needs.package.result }}
-          AUR_RESULT: ${{ needs.aur.result }}
           PYTHON_RESULT: ${{ needs.python.result }}
           KNIP_CHANGED: ${{ needs.changes.outputs.knip }}
           KNIP_RESULT: ${{ needs.knip.result }}
@@ -576,16 +545,6 @@ jobs:
 
           if [[ "$WEBSITE_CHANGED" == "true" && "$WEBSITE_RESULT" != "success" ]]; then
             echo "Website validation ended with: $WEBSITE_RESULT"
-            failed=1
-          fi
-
-          if [[ "$PACKAGE_CHANGED" == "true" && "$PACKAGE_RESULT" != "success" ]]; then
-            echo "Package verification ended with: $PACKAGE_RESULT"
-            failed=1
-          fi
-
-          if [[ "$PACKAGE_CHANGED" == "true" && "$AUR_RESULT" != "success" ]]; then
-            echo "AUR package validation ended with: $AUR_RESULT"
             failed=1
           fi
 

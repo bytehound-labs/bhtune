@@ -4,12 +4,12 @@ sidebar_position: 4
 
 # Release verification
 
-Use this procedure before installing a BHTune release artifact or generating the first
-`bhtune-bin` AUR metadata from it. It applies to a stable release and to a release candidate;
-the expected tag pattern and publication rules differ, but the evidence checks are the same.
+Use this procedure to verify a BHTune release artifact before installation or release-candidate
+validation. Stable releases are the supported installation channel; release candidates are for
+validation only.
 
-The release workflow produces Linux, macOS, and Windows archives, one Debian package, one RPM
-package, `release-assets.sha256`, `release-sbom.cdx.json`,
+The release workflow produces Linux, macOS, and Windows archives, `release-assets.sha256`,
+`release-sbom.cdx.json`,
 `release-provenance.bundle.json`, and a `.sigstore.json` bundle for every release asset.
 The Windows NSIS installer is an additional workflow artifact produced from the exact Windows
 archive by its reusable workflow. Until the release-automation handoff attaches it to the
@@ -32,24 +32,16 @@ terminal output in the release record.
 ## 1. Select the expected tag and asset set
 
 Stable publication uses an exact tag such as `v0.1.0`. Release candidates use a tag such as
-`v0.1.0-rc.1`; they are validation-only and must not be used to publish the Windows installer
-or AUR metadata. Arbitrary refs are dry-run inputs only.
+`v0.1.0-rc.1`; they are validation-only and must not be used as supported installations.
+Arbitrary refs are dry-run inputs only.
 
-The release matrix currently contains:
+The release matrix contains:
 
 ```text
 bhtune-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 bhtune-vX.Y.Z-aarch64-apple-darwin.tar.gz
 bhtune-vX.Y.Z-x86_64-pc-windows-msvc.zip
-bhtune_X.Y.Z-1_amd64.deb
-bhtune-X.Y.Z-1.x86_64.rpm
 ```
-
-For a prerelease tag such as `v0.1.0-rc.1`, package asset filenames normalize the prerelease
-separator to a dot: `bhtune_0.1.0.rc.1-1_amd64.deb` and
-`bhtune-0.1.0.rc.1-1.x86_64.rpm`. The RPM metadata still uses the RPM-safe version
-`0.1.0~rc.1`; this packaging-only normalization does not change the version reported by the
-binaries or embedded in the other release assets.
 
 Per-archive checksum assets omit the archive extension. For example, the checksum for
 `bhtune-v0.1.0-rc.1-x86_64-unknown-linux-gnu.tar.gz` is
@@ -79,8 +71,6 @@ cd "bhtune-$tag"
 gh release download "$tag" \
   --repo bytehound-labs/bhtune \
   --pattern 'bhtune-*' \
-  --pattern '*.deb' \
-  --pattern '*.rpm' \
   --pattern 'release-assets.sha256' \
   --pattern 'release-sbom.cdx.json' \
   --pattern 'release-provenance.bundle.json' \
@@ -136,9 +126,7 @@ For an individual archive, its published `.sha256` file can also be checked dire
 sha256sum -c bhtune-vX.Y.Z-x86_64-unknown-linux-gnu.sha256
 ```
 
-The per-archive checksum filename omits the archive extension. The hosted canary installs the
-Debian package as a local path with a `./` prefix for the same reason: without that prefix,
-`apt-get` interprets `dist/package.deb` as a package/version selector instead of a local file.
+The per-archive checksum filename omits the archive extension.
 
 ## 4. Verify Sigstore bundles
 
@@ -155,8 +143,8 @@ cosign verify-blob \
   bhtune-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 ```
 
-Repeat the command for the macOS archive, Windows archive, `.deb`, `.rpm`, and any Windows
-installer artifact. The certificate identity must match the workflow and exact tag under review;
+Repeat the command for the macOS archive, Windows archive, and any Windows installer artifact.
+The certificate identity must match the workflow and exact tag under review;
 do not accept a generic GitHub identity or a signature from an arbitrary branch.
 
 Sigstore verifies keyless signing claims. It does not make an unsigned Windows installer an
@@ -358,79 +346,20 @@ upgrade procedure. Its automatic rollback boundary covers only the installer-man
 ProgramData BHTune database plus the managed gateway ProgramData tree; an external BHTune
 database requires an independent backup and explicit operator acknowledgement.
 
-## 8. Verify the Linux archive used by `bhtune-bin`
+## 8. Inspect a platform archive
 
-The AUR package is a binary package. Its source is the exact stable Linux archive plus
-individually checked-summed tag files; it does not compile Rust or the frontend.
-
-After downloading the exact tag, inspect the generated metadata from the validation workflow:
+Each platform archive contains both `bhtune` and `bhtune-server` at its root, plus `LICENSE`
+and `README.md`. Inspect its file list after verifying the checksum:
 
 ```sh
-grep -E '^(pkgver|source|sha256sums)=' PKGBUILD
-grep -E '^(pkgname|pkgver|source|sha256sums)' .SRCINFO
+tar -tzf bhtune-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+unzip -l bhtune-vX.Y.Z-x86_64-pc-windows-msvc.zip
 ```
 
-Verify that:
+Confirm that the archive matches the expected target and contains both executables before
+installation.
 
-- `pkgver` is the generator's normalized form of the exact stable tag.
-- The archive URL contains the immutable tag, not `main`, `master`, `latest`, or another
-  mutable branch.
-- The archive checksum and every ancillary-file checksum match the downloaded sources.
-- `.SRCINFO` was generated by non-root `makepkg --printsrcinfo`; it was not hand-authored.
-- The package installs `/usr/bin/bhtune`, `/usr/bin/bhtune-server`, the package-managed
-  `/usr/lib/systemd/system/bhtune-server.service`, man pages, and all three completions.
-
-For a local reproduction in an Arch environment:
-
-```sh
-makepkg --verifysource
-makepkg --printsrcinfo > /tmp/bhtune.SRCINFO
-diff -u .SRCINFO /tmp/bhtune.SRCINFO
-makepkg --nodeps --noconfirm
-pacman -Qip ./bhtune-bin-*.pkg.tar.zst
-```
-
-Install and lifecycle-test the package in a disposable environment. Package installation must
-not enable or start the service; the operator explicitly runs:
-
-```sh
-sudo systemctl enable --now bhtune-server
-curl --fail http://127.0.0.1:8787/api/health
-```
-
-After an upgrade and removal, verify that `/etc/bhtune` and `/var/lib/bhtune` still contain the
-operator's configuration and database.
-
-## 9. Verify the AUR commit
-
-The first AUR publication is manual after the stable release has passed independent
-verification. The publication workflow refuses unexpected history and verifies the remote
-commit after pushing.
-
-Check the public branch:
-
-```sh
-aur_commit="$(git ls-remote ssh://aur@aur.archlinux.org/bhtune-bin.git refs/heads/master |
-  awk '{print $1}')"
-test -n "$aur_commit"
-printf 'AUR master: %s\n' "$aur_commit"
-```
-
-Compare that commit with a clean clone:
-
-```sh
-tmp="$(mktemp -d)"
-git clone --depth 1 ssh://aur@aur.archlinux.org/bhtune-bin.git "$tmp/bhtune-bin"
-git -C "$tmp/bhtune-bin" status --short
-git -C "$tmp/bhtune-bin" rev-parse HEAD
-git -C "$tmp/bhtune-bin" ls-files
-```
-
-The tracked file set must be exactly `PKGBUILD` and `.SRCINFO`. Compare both files with the
-metadata generated from the same tag and confirm that the commit is the one reported by
-`git ls-remote`. Do not force-push a different history or accept untracked generated content.
-
-## 10. Record the verification
+## 9. Record the verification
 
 Retain a small release record containing:
 
@@ -442,12 +371,10 @@ Retain a small release record containing:
 - the SBOM component count and review notes;
 - Windows installer service/health evidence, gateway checksum/provenance/listener/read-only
   smoke evidence, and unchanged-firewall evidence, when applicable;
-- Arch package contents and lifecycle evidence, when applicable;
-- the exact AUR commit after publication.
 
 If any evidence is missing, mismatched, or ambiguous, stop the release or installation. Do not
-repair a release by editing checksums, replacing a tag, hand-authoring `.SRCINFO`, or bypassing
-the stable-tag and workflow-identity checks.
+repair a release by editing checksums, replacing a tag, or bypassing the stable-tag and
+workflow-identity checks.
 
 ## Related procedures
 

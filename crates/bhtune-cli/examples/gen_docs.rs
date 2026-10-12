@@ -8,9 +8,8 @@
 //!
 //! Regenerates:
 //! - `docs/reference/cli.md` -- the full CLI reference, one page (clap-markdown).
-//! - `man/*.1` -- one man page per command and subcommand, git-style naming
-//!   (`bhtune-template-list.1`, etc.), so `pkg-aur` has real pages to install into
-//!   `/usr/share/man/man1/` (clap_mangen).
+//! - `man/*.1` -- one man page per command and subcommand, using git-style names
+//!   (`bhtune-template-list.1`, etc.) (clap_mangen).
 //! - `completions/bhtune.bash`, `completions/_bhtune`, `completions/bhtune.fish` (clap_complete).
 //! - `docs/reference/config.md` -- JSON Schema for `bhtune.toml` (`BhtuneConfig`) and the
 //!   DCS/PLC template catalog shape (`DcsTemplate`), via `schemars`.
