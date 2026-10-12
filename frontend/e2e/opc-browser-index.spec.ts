@@ -285,6 +285,49 @@ test.describe(OPC_BROWSER_SUITE, () => {
     });
   }
 
+  test("prompts for a manual first build when auto-refresh is enabled without a usable index", async ({
+    page,
+  }) => {
+    const index = await mockBrowserIndex(
+      page,
+      searchIndexStatus("not_indexed", true),
+    );
+    const indexActions: string[] = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (
+        path === "/api/opc/search-index/refresh" ||
+        path === "/api/opc/search-index/auto-refresh"
+      ) {
+        indexActions.push(`${request.method()} ${path}`);
+      }
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+
+    await expect(
+      page.getByText("Index: not indexed", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        "Auto-refresh: waiting for the first index; run Refresh Index once",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(page.getByLabel("Search OPC tags")).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Refresh Index", exact: true }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Enable Auto-refresh", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Disable Auto-refresh", exact: true }),
+    ).toHaveCount(0);
+    expect(index.status.auto_refresh_enabled).toBe(true);
+    expect(indexActions).toEqual([]);
+  });
+
   for (const enabled of [false, true]) {
     test(`failed auto-refresh control preserves the saved ${enabled} choice`, async ({
       page,
@@ -561,7 +604,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
     ).not.toBeVisible();
   });
 
-  test("hides recovered inventory diagnostics when the index is ready", async ({
+  test("does not show an error banner for diagnostics on a ready index", async ({
     page,
   }) => {
     const diagnostic =
@@ -587,6 +630,9 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await page.getByRole("button", { name: "Browse tags" }).click();
 
     await expect(page.getByText("Index: ready")).toBeVisible();
+    await expect(
+      page.getByText(`Index error: ${diagnostic}`, { exact: true }),
+    ).toHaveCount(0);
     await expect(
       page.getByText(`Index warning: ${diagnostic}`, { exact: true }),
     ).not.toBeVisible();

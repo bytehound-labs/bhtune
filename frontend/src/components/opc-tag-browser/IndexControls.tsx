@@ -1,6 +1,7 @@
 import type { OpcSearchIndexStatusResponse } from "../../api/opc";
 import { formatExactTime, formatTimeUntil } from "../../lib/time";
 import { Button, LoadingStatus } from "../ui";
+import { hasUsableIndex } from "./searchModel";
 
 type IndexControlsProps = Readonly<{
   opcServer: string;
@@ -39,6 +40,12 @@ export function IndexControls({
 }: IndexControlsProps) {
   const canCancelBuild =
     indexStatus?.state === "partial" || indexStatus?.state === "refreshing";
+  const waitingForFirstIndex =
+    indexStatus !== undefined &&
+    indexStatus.auto_refresh_enabled &&
+    !hasUsableIndex(indexStatus) &&
+    !canCancelBuild &&
+    indexStatus.state !== "deleting";
   const canDelete =
     indexStatus &&
     (indexStatus.active_generation > 0 || indexStatus.state === "failed");
@@ -51,7 +58,9 @@ export function IndexControls({
     ? indexStatus.scheduler.next_refresh_at
     : null;
   let autoRefreshLabel = "disabled";
-  if (indexStatus?.auto_refresh_enabled) {
+  if (waitingForFirstIndex) {
+    autoRefreshLabel = "waiting for the first index; run Refresh Index once";
+  } else if (indexStatus?.auto_refresh_enabled) {
     autoRefreshLabel = nextRefreshAt ? "enabled" : "not scheduled";
   }
 
@@ -134,17 +143,20 @@ export function IndexControls({
             Next refresh: {formatTimeUntil(nextRefreshAt)}
           </span>
         )}
-        {indexStatus && indexStatus.active_generation > 0 && (
-          <span
-            title={
-              indexStatus.auto_refresh_enabled && !nextRefreshAt
-                ? "This server is enabled, but the gateway has not reported a scheduled refresh."
-                : undefined
-            }
-          >
-            Auto-refresh: {autoRefreshLabel}
-          </span>
-        )}
+        {indexStatus &&
+          (indexStatus.active_generation > 0 || waitingForFirstIndex) && (
+            <span
+              title={
+                indexStatus.auto_refresh_enabled &&
+                !nextRefreshAt &&
+                !waitingForFirstIndex
+                  ? "This server is enabled, but the gateway has not reported a scheduled refresh."
+                  : undefined
+              }
+            >
+              Auto-refresh: {autoRefreshLabel}
+            </span>
+          )}
       </div>
       {indexError && (
         <output ref={onIndexErrorShown} className="block text-xs text-red-300">
