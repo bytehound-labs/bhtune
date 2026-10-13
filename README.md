@@ -112,6 +112,8 @@ Read the [full documentation site](https://bytehound-labs.github.io/bhtune/) or
 data without a plant connection. References include the [CLI](docs/reference/cli.md),
 [Rust API](docs/reference/api.md), [configuration](docs/reference/config.md),
 [DCS/PLC templates](docs/dcs-templates.md), [Demo policy](docs/guides/public-simulator-demo.md),
+[end-to-end tutorial](docs/guides/end-to-end-tutorial.md),
+[troubleshooting](docs/guides/troubleshooting.md), [glossary](docs/reference/glossary.md),
 [release guide](docs/guides/releasing.md), and [roadmap](docs/roadmap.md).
 
 ## License
