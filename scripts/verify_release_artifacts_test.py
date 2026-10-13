@@ -22,7 +22,11 @@ class ReleaseArtifactTests(unittest.TestCase):
             directory / f"bhtune-{tag}-aarch64-apple-darwin.tar.gz",
             directory / f"bhtune-{tag}-x86_64-pc-windows-msvc.zip",
         ]
-        product_assets = archives
+        packages = [
+            directory / "bhtune_0.1.0.rc.1-1_amd64.deb",
+            directory / "bhtune-0.1.0.rc.1-1.x86_64.rpm",
+        ]
+        product_assets = [*archives, *packages]
         for index, asset in enumerate(product_assets):
             asset.write_bytes(f"asset-{index}".encode())
             digest = hashlib.sha256(asset.read_bytes()).hexdigest()
@@ -59,7 +63,7 @@ class ReleaseArtifactTests(unittest.TestCase):
         directory, tag = self.make_release()
         report = verify_release_assets(directory, tag)
         self.assertEqual(report["tag"], tag)
-        self.assertEqual(len(report["product_assets"]), 3)
+        self.assertEqual(len(report["product_assets"]), 5)
 
     def test_rejects_stable_tag(self):
         directory, _ = self.make_release()

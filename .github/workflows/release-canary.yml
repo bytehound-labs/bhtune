@@ -198,6 +198,18 @@ jobs:
           test -s "$RUNNER_TEMP/health.json"
           curl --fail --silent http://127.0.0.1:8787/ | grep -Eiq '<!doctype html|<html'
 
+          deb="$(find dist -maxdepth 1 -name '*.deb' -print -quit)"
+          test -n "$deb"
+          sudo apt-get update
+          sudo apt-get install -y "./$deb"
+          command -v bhtune
+          bhtune --version | grep -F "$version"
+
+          docker run --rm --pull=always \
+            -v "$PWD/dist:/dist:ro" \
+            fedora:latest \
+            bash -euxo pipefail -c \
+            'dnf install -y /dist/*.rpm && bhtune --version'
         if: runner.os == 'Linux'
 
       - name: Run macOS archive, CLI, and server smoke tests

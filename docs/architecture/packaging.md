@@ -14,11 +14,13 @@ The documented distribution status is:
 | Channel | Status |
 | --- | --- |
 | Windows NSIS installer | Primary distribution path; its stable-release asset is pending the first stable release. |
-| Release archives | Linux x86_64, macOS arm64, and Windows x86_64 archives are produced for tagged releases. |
 | Docker / GHCR | The `edge` image is the available pre-stable image. Stable version tags depend on a stable release. |
+| Debian `.deb` and RPM `.rpm` | Package definitions and release jobs are prepared; packages are not publicly installable until stable release assets exist. |
+| Arch `bhtune-bin` / AUR | The generator and validation workflow are prepared. First publication is a manual post-release step; there is no public package before then. |
+| Homebrew | Publishing is an open evaluation, not an active release channel. |
 
 The first stable release has not been cut. Prerelease and dry-run artifacts support validation;
-they do not make stable installation assets available. The
+they do not make the stable installation channels available. The
 [installation guide](../getting-started/installation.md) describes available artifacts and
 platform-specific steps, and the [release guide](../guides/releasing.md) documents the
 fail-closed release process and activation gates.

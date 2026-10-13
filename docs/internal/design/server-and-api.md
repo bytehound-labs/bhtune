@@ -456,19 +456,18 @@ new `crates/bhtune-server/src/service.rs`, a `#[cfg(target_os = "windows")]` mod
 `windows-service` crate for real SCM `install`/`uninstall`/`start`/`stop`/`status`, and — since
 `bhtune-server` (unlike the Windows-only `opcda-bridge-gateway` it borrows this pattern from) is
 genuinely cross-platform — real, informative, non-panicking stub functions on every other OS that
-explain the platform-specific service path (the manual systemd unit on Linux and the installation
-guide for macOS) instead of silently doing nothing. `crates/bhtune-server/src/cli.rs` gained the five
+explain the actual platform equivalent (systemd on Linux, launchd on macOS) and point at the new
+packaging files instead of silently doing nothing. `crates/bhtune-server/src/cli.rs` gained the five
 subcommands plus a global `--config <path>` flag, captured into the service's own registered launch
 arguments at install time so a service-launched process always resolves the same config file
 regardless of which account the SCM runs it as (a real gotcha — see the installation guide's
 callout). `main.rs` is now a thin platform-split dispatcher: a synchronous `fn main()` on Windows
 tries SCM dispatch first, falling back to building its own Tokio runtime for interactive use when
 run outside the SCM; every other platform still runs the async server directly, unchanged. New
-`packaging/systemd/manual/bhtune-server.service` (validated with `systemd-analyze verify`)
-supplies the Linux archive-install unit. No macOS launchd plist is shipped; the installation
-guide directs operators to configure their own service definition. This Linux sandbox still
-cannot compile `#[cfg(windows)]` code directly (`libsqlite3-sys` needs an
-`x86_64-w64-mingw32-gcc` cross-compiler that isn't installed and
+`packaging/systemd/bhtune-server.service` (validated with `systemd-analyze verify`) and
+`packaging/launchd/com.bytehound-labs.bhtune-server.plist` (validated with Python's `plistlib`)
+supply the Linux/macOS equivalents. This Linux sandbox still cannot compile `#[cfg(windows)]` code
+directly (`libsqlite3-sys` needs an `x86_64-w64-mingw32-gcc` cross-compiler that isn't installed and
 can't be — no passwordless sudo to install `mingw-w64`), so the Windows-specific SCM glue was
 verified by careful line-by-line comparison against the already-CI-proven `opcda-bridge-gateway`
 reference implementation and against the `windows-service` 0.8 API surface on docs.rs, plus the real

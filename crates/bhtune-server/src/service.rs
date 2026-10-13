@@ -12,13 +12,15 @@
 //! (same crate, same design), generalized for a binary that -- unlike that Windows-only
 //! gateway -- genuinely runs cross-platform.
 //!
-//! Linux and macOS have no equivalent self-registration API. Linux archive installs can use
-//! the manual systemd unit at `packaging/systemd/manual/bhtune-server.service`; macOS service
-//! setup is described in the installation guide, with no launchd plist shipped. On those
-//! platforms, these public functions are still real (not `#[cfg(windows)]`-gated away, so
-//! `bhtune-server install` fails with a helpful message rather than clap rejecting an
-//! unrecognized subcommand outright), but they only explain the platform path instead of
-//! touching anything.
+//! Linux and macOS have no equivalent self-registration API: the idiomatic path there is a
+//! static unit/plist file installed by an administrator or package with the OS's own tooling,
+//! not something this binary does to itself at runtime --
+//! see `packaging/systemd/bhtune-server.service` and
+//! `packaging/launchd/com.bytehound-labs.bhtune-server.plist`. So on those platforms, this
+//! module's public functions are still real (not `#[cfg(windows)]`-gated away, so
+//! `bhtune-server install` on Linux fails with a helpful message rather than clap rejecting
+//! an unrecognized subcommand outright), but they only explain that and point at the
+//! relevant packaging file instead of touching anything.
 
 use crate::cli::Cli;
 use std::path::PathBuf;
@@ -131,10 +133,12 @@ pub fn is_scm_launch_error_code(code: Option<i32>) -> bool {
 fn platform_service_error(action: &str) -> anyhow::Error {
     anyhow::anyhow!(
         "`bhtune-server {action}` manages a Windows service and only works on Windows.\n\
-         On Linux, install the manual systemd unit:\n  \
-         packaging/systemd/manual/bhtune-server.service\n\
-         On macOS, see docs/getting-started/installation.md#macos-release-archive for service \
-         guidance (no launchd plist is provided)."
+         On Linux, install the provided systemd unit instead:\n  \
+         packaging/systemd/bhtune-server.service\n\
+         On macOS, install the provided launchd daemon instead:\n  \
+         packaging/launchd/com.bytehound-labs.bhtune-server.plist\n\
+         See docs/getting-started/installation.md#run-as-a-background-service for the exact \
+         steps."
     )
 }
 
@@ -498,7 +502,7 @@ mod tests {
 
     #[cfg(not(target_os = "windows"))]
     #[test]
-    fn non_windows_stubs_name_the_action_and_point_at_platform_guidance() {
+    fn non_windows_stubs_name_the_action_and_point_at_packaging() {
         for (action, result) in [
             ("install", install(&cli_with(None))),
             ("uninstall", uninstall()),
@@ -511,9 +515,8 @@ mod tests {
                 message.contains(&format!("bhtune-server {action}")),
                 "message for {action} should name the action verbatim: {message}"
             );
-            assert!(message.contains("packaging/systemd/manual/bhtune-server.service"));
-            assert!(message.contains("docs/getting-started/installation.md#macos-release-archive"));
-            assert!(!message.contains("packaging/launchd/"));
+            assert!(message.contains("packaging/systemd/bhtune-server.service"));
+            assert!(message.contains("packaging/launchd/"));
         }
     }
 }

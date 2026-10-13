@@ -49,6 +49,15 @@ installer-build/
 installer/windows/test-artifacts/
 installer/windows/tests/.work/
 
+# AUR package validation artifacts
+.aurpkg-test-work-*/
+aur-cache/
+aur-evidence/
+aur-fixture/
+aur-metadata/
+aur-metadata-pkgrel2/
+aur-release/
+
 # Python (scripts/convert_golden_trace.py)
 __pycache__/
 *.pyc

@@ -63,7 +63,7 @@ Pulled into `bhtune` from `opcda-bridge`'s example:
   The original package job still surfaced a real bug before this distinction mattered —
   every workspace-internal path dependency lacked a `version` requirement, which `cargo
 package` refuses even to assemble. Giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
-`bhtune` `{ path, version }` entries in `[workspace.dependencies]` and switching every
+  `bhtune` `{ path, version }` entries in `[workspace.dependencies]` and switching every
   consumer to `.workspace = true` remains required.
 - **`concurrency` groups, `permissions: contents: read`, and `--locked` everywhere** across
   `checks.yml`/`coverage.yml`/`e2e.yml`.
@@ -128,7 +128,7 @@ The repository now has a layered hardening gate for both source changes and rele
   status, so branch protection still receives one deterministic result when a fan-out job is
   intentionally skipped. Every major workflow job has a `timeout-minutes` bound.
 - **Release integrity.** Docker builds publish provenance and SBOM attestations. Tagged
-  releases download their archives into a dedicated supply-chain job, generate a
+  releases download their archives/packages into a dedicated supply-chain job, generate a
   CycloneDX SBOM and checksums, create GitHub artifact provenance attestations, and sign every
   release asset with keyless Cosign bundles before uploading the evidence beside the assets.
 - **Parser resilience.** `proptest` tests cover config serialization/parsing, template TOML/

@@ -244,7 +244,7 @@ OpenAPI spec (`openapi.json`) and CLI reference
 run -p bhtune-server --example gen_openapi` and `cargo run -p bhtune --example gen_docs
 --features schemars` and commit the result after changing an HTTP route/DTO or a `clap`
 argument, respectively. The package job runs `cargo package --workspace --locked
---no-verify` to assemble each workspace crate's publishable package. Tarball verification
+--no-verify` to validate that every release archive can be assembled. Tarball verification
 is deliberately skipped there because Cargo removes local paths and resolves same-version
 workspace dependencies from crates.io, which cannot compile coordinated unpublished API
 changes; the workspace build, Clippy, and test jobs compile the real local dependency graph.
@@ -266,16 +266,35 @@ and a link to the related pull request or documentation.
 
 ### Packaging validation
 
-Release packaging consists of platform archives, the Docker image, and the Windows NSIS
-installer workflow. Keep generated artifacts and disposable workspaces outside the repository.
-For release-artifact or workflow changes, run the Python script tests and actionlint:
+Packaging changes must keep generated artifacts and disposable package workspaces outside the
+repository. The AUR generator is metadata-only: it does not compile Rust or frontend code,
+contact AUR, or publish anything. Run its network-free regression suite and shell checks before
+opening a packaging pull request:
 
 ```sh
-python3 -m unittest discover -s scripts -p '*_test.py'
-actionlint
+python3 scripts/aurpkg_test.py
+shellcheck scripts/aurpkg
+shfmt -d scripts/aurpkg
 ```
 
-Cargo package changes are also checked with `cargo package --workspace --locked --no-verify`.
+Use a disposable Arch environment and a non-root build user for `makepkg --verifysource`,
+package installation, upgrade, removal, and service-state checks. Generate `.SRCINFO` with
+`makepkg --printsrcinfo`; never hand-edit it. Publication is intentionally separate from pull
+request validation, requires an exact stable `vX.Y.Z` tag and independently verified release
+evidence, and remains a manual first-release action until the post-release AUR commit has been
+verified. The reusable Arch job feeds its validation script to `docker run -i` and writes
+machine-readable evidence through the host-mounted `aur-evidence/` directory; preserve both
+invariants when changing that workflow. The regression suite must run with the repository root
+as its working directory because its ancillary-file inventory intentionally uses repository-
+relative paths.
+Package-content assertions use archive-relative paths and accept either `bsdtar`
+leading-path convention (`usr/...` or `./usr/...`).
+
+Debian packages use adaptive `depends = "$auto"` metadata and therefore require
+`dpkg-shlibdeps` in the packaging environment. Do not hard-code a dependency list to compensate
+for an incomplete local package build. Keep `.github/workflows/release.yml` unchanged when
+working on reusable installer or AUR validation/publication workflows; release integration is a
+separate coordination task.
 
 ## Security and compatibility checks
 

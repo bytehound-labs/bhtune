@@ -5,11 +5,22 @@ the [design notes index](README.md) for provenance.
 
 ## Distribution channel summary
 
-The release workflow builds Linux x86_64, macOS arm64, and Windows x86_64 archives containing
-both binaries. Docker images are published to GHCR, and the Windows NSIS installer is validated
-separately; attaching it to a stable release remains deferred. The `bhtune` manifest retains
-`cargo-binstall` metadata for a future approved crates.io publication. No Debian/RPM, Arch/AUR,
-Homebrew, or bundled macOS launchd package definitions are shipped.
+`pkg-evaluate-others` and `pkg-aur` provide `.deb` and `.rpm` packages (via `cargo-deb` and
+`cargo-generate-rpm`, sharing the same asset set as the Docker image), the guarded `bhtune-bin` AUR
+generator and reusable validation/publication workflow, `cargo-binstall` metadata on `bhtune`,
+and a prepared-but-inert Homebrew formula awaiting a real tap repo and release checksums. The AUR
+workflow accepts only exact stable `vX.Y.Z` tags for publication; prereleases and arbitrary refs are
+validation-only, and the first publication is still a manual post-release action. `release.yml`
+gained a new `package-deb-rpm` job, deliberately separate from the existing per-platform `build`
+matrix rather than extra steps on its Linux leg, because `upload-rust-binary-action` always builds
+with an explicit `--target`, leaving binaries in a target-triple subdirectory the packaging asset
+paths don't expect. Both new package formats, and the job itself, were validated by actually
+dispatching `release.yml` in GitHub Actions rather than trusting local testing alone — which caught
+a real bug (`cargo generate-rpm` doesn't create its own missing output directory, unlike
+`cargo-deb`) invisible to local runs because the local test directory always happened to pre-exist.
+See "`pkg-evaluate-others`: the remaining distribution channels" below for the full design,
+including a `-p` flag that is a path for one tool and a crate name for the other despite identical
+`--help` wording, and why winget stays out of scope for now.
 
 ## `build-matrix`: the release binary matrix
 
@@ -25,18 +36,20 @@ already-proven alternative doing exactly what this project needs, with far less 
 one action builds the binaries, packages a platform-appropriate archive (`.tar.gz` on
 Unix, `.zip` on Windows), computes checksums, and uploads to the tag's GitHub Release.
 `cargo-dist` additionally generates shell/PowerShell/npm installer scripts and an
-updater — none of which BHTune needs, since the Windows NSIS installer
-(`pkg-windows-installer`) and the platform release archives are the distribution paths, not a
-`curl | sh` script.
+updater — none of which bhtune needs, since the Windows NSIS installer
+(`pkg-windows-installer`) and
+the AUR package (`pkg-aur`) are the actual installer stories, not a `curl | sh` script.
 Adopting the sibling project's simpler, working tool beats introducing a second,
 heavier one for the same job — directly the kind of cross-project consistency
 `cross-project-ci-audit` recommended pursuing.
 
 **One archive per platform, bundling both binaries.** `bin: bhtune,bhtune-server` in a
 single `upload-rust-binary-action` step packages both into one
-`bhtune-$tag-$target.(tar.gz|zip)` archive (plus `LICENSE`/`README.md` via `include:`).
-The browser-served UI has no separate GUI-toolkit dependency, so the CLI and server ship
-together in each platform archive.
+`bhtune-$tag-$target.(tar.gz|zip)` archive (plus `LICENSE`/`README.md` via `include:`) —
+matching the "one package, not two" packaging decision below: now that the GUI is
+browser-served rather than a Tauri app, there is no GUI-toolkit dependency that would need
+keeping off a headless server build, so there is no reason to ship the CLI and the server
+as separate packages either.
 
 **The frontend must build before the Rust build, every time, in this specific
 workflow.** `bhtune-server`'s `--release` profile embeds `frontend/dist/` into the binary
@@ -183,14 +196,142 @@ left for the next person to wonder about. Verified by fetching the GHCR package 
 before and after: the tag pushed before this change shows two manifest entries, the tag
 pushed after shows exactly one.
 
-## Cargo-binstall metadata
+## `pkg-evaluate-others`: the remaining distribution channels
 
-`[package.metadata.binstall]` is defined on `bhtune` only. Crates.io publication remains
-disabled by `release-plz.toml`, so the metadata is not an active installation path. If
-publication is separately approved, `cargo-binstall` can use the existing release archives:
-the URL includes the project's `v`-prefixed tag, the binary directory is flat, and Windows
-uses ZIP while Unix targets use tar archives. `bhtune-server` remains unpublished and is
-distributed with `bhtune` in the platform archives.
+Evaluated the "nearly free" and "moderate effort" channels from the packaging shortlist
+(see "Key architectural decisions") and shipped three of them; the fourth (Homebrew) is
+prepared but deliberately not yet activated. winget remains out of scope for now (see
+below).
+
+**`.deb` and `.rpm`, both built from the same `[package.metadata.*]` blocks on
+`crates/bhtune-cli/Cargo.toml`, the same asset set as the Docker image and the release
+archives: both binaries, man pages, shell completions, and the `bhtune-server` systemd
+unit.** `cargo-deb` builds the `.deb`; `cargo-generate-rpm` builds the `.rpm`. One package
+per format, not per binary, for the same reason as the Docker image and the release
+archive: there is no GUI-toolkit dependency to keep off a headless install anymore, so
+splitting the CLI and the server apart would only add packaging work for no benefit.
+
+**Neither tool builds or strips the binaries itself, unlike `cargo-deb`'s own defaults in
+other invocation modes** — both are invoked with pre-built, pre-stripped release binaries
+already sitting at `target/release/`, confirmed by testing: `cargo-deb --no-build` and
+`cargo generate-rpm` (which has no build step at all, ever, in any invocation) both simply
+read whatever is already on disk.
+
+**Path resolution is a real, easy-to-get-wrong difference between the two tools.**
+`cargo-deb`'s relative asset paths resolve against _the crate's own manifest directory_
+(`crates/bhtune-cli/`), hence the `../../` prefixes on every path in its `assets` block
+that reaches outside that directory. `cargo-generate-rpm`'s relative paths resolve against
+_the current working directory first_, falling back to the crate directory only if not
+found there (confirmed against its own `generate_expanded_path`/`load_script_if_path`
+source) — since it's invoked from the workspace root (matching `release.yml`'s actual
+invocation), every path in its `assets` block is written workspace-root-relative with no
+`../../` prefix at all. Mixing the two conventions up produces a tool that runs without
+error but silently packages the wrong files (or none), so this was verified by building
+and manually inspecting the contents of both a real `.deb` and a real `.rpm` file — not
+just by reading the source.
+
+**`cargo-generate-rpm -p` is a path, not a package name, despite its own `--help` text
+saying otherwise** ("Name of a crate in the workspace") — confirmed in its source
+(`Config::new(Path::new(p), ...)` joins the argument directly with `Cargo.toml`). It must
+be invoked as `cargo generate-rpm -p crates/bhtune-cli`, not `-p bhtune` (the latter fails
+with "No such file or directory"). `cargo-deb -p`, by contrast, really is a package name,
+matching its own `--help` text correctly.
+
+**Neither tool needs a hand-written `dpkg-shlibdeps`/`find-requires` step for shared
+library dependencies, but for different reasons.** `cargo-deb`'s `depends = "$auto"` calls
+out to Debian's own `dpkg-shlibdeps`, which is standard tooling on any real Debian/Ubuntu
+build host (including `ubuntu-latest` GitHub runners) even though it isn't present on
+every development sandbox. `cargo-generate-rpm`'s default `auto-req = "auto"` mode instead
+uses the Rust `rpm` crate's own built-in ELF scanner when no external `find-requires`
+script is present — confirmed by inspecting a built test package's `requirename` header,
+which correctly listed versioned `glibc`/`libgcc_s`/`libm`/`ld-linux` requirements with
+zero extra configuration.
+
+**`cargo-generate-rpm` has no automatic systemd-unit lifecycle integration (no
+`dh_installsystemd` equivalent), unlike `cargo-deb`'s `[package.metadata.deb.systemd-units]`
+table.** The unit file is just a plain asset in the `.rpm` case; enabling/disabling/
+restarting it across install/upgrade/removal is hand-scripted via
+`post_install_script`/`pre_uninstall_script`/`post_uninstall_script`, using the classic,
+portable `systemctl preset`/`disable`/`stop`/`daemon-reload`/`try-restart` form (not the
+newer `systemd-update-helper`-delegating rewrite some distros' RPM macros now expand to,
+since that helper's presence isn't guaranteed across every RPM-based distro) — the same
+shell these macros have expanded to for years, confirmed against systemd upstream's own
+`macros.systemd.in`. RPM's `$1` scriptlet argument conventions (install vs. upgrade vs.
+final removal) follow the Fedora Packaging Guidelines' Scriptlets page exactly.
+
+**`cargo-generate-rpm`'s `-o <dir>/` does not create a missing output directory itself,
+unlike `cargo-deb`'s `-o <dir>/`.** Caught by actually dispatching `release.yml` in CI, not
+by local testing alone — local testing happened to always pre-create the output
+directory, masking the bug. A trailing-slash path that doesn't exist yet makes the tool
+treat it as a literal (non-existent) _file_ target rather than a directory to create,
+failing with `Is a directory (os error 21)` once the OS's own trailing-slash-implies-
+directory rule kicks in. Fixed with a plain `mkdir -p` immediately before the
+`cargo generate-rpm` invocation in `release.yml`.
+
+**`release.yml`'s new `package-deb-rpm` job is deliberately separate from `build`'s
+existing per-platform matrix, not extra steps on `build`'s Linux leg, because of where
+`upload-rust-binary-action` actually leaves its build output.** That action always passes
+an explicit `target:` input, so — confirmed by reading its `main.sh` — it always builds via
+`cargo build --target x86_64-unknown-linux-gnu`, leaving binaries under
+`target/x86_64-unknown-linux-gnu/release/`, not the plain `target/release/` the Cargo.toml
+packaging blocks above assume (and that local testing used). Rather than adjust the
+asset-path convention to depend on cross-compilation-target-dir details, `package-deb-rpm`
+does its own untargeted `cargo build --release` — one extra compile, cheap next to the
+existing three-platform matrix, that keeps the already-tested asset paths correct with no
+cross-compilation assumptions at all. It builds and packages on every trigger
+(`workflow_dispatch` dry run or a real tag push), matching `build`'s own dry-run
+convention, and uploads the two files to the release only on a real tag push, via a plain
+`gh release upload` — no additional third-party action needed for two files.
+
+**`cargo-deb` installs from a prebuilt binary via `taiki-e/install-action`; `cargo-
+generate-rpm` does not and is built from source via `cargo install --locked` instead** —
+confirmed against its GitHub Releases, which carry no binary assets at all, only source
+tags.
+
+**`[package.metadata.binstall]`, added to `bhtune` only, not `bhtune-server`.** Inert
+until `bhtune` is actually published to crates.io (`release-plz.toml` has
+`publish = false` workspace-wide, pending `release-v1`), but ready the moment it is, since
+`cargo binstall` only reads this from a manifest it's already fetched — no separate opt-in
+step needed later. `bhtune-server` is deliberately excluded: it has its own
+`publish = false` and is meant to be installed as a system service via the OS packages
+above, not fetched by `cargo install`/`cargo binstall` as a CLI tool. Two details had to
+match `release.yml`'s actual archive layout exactly, both confirmed against
+`taiki-e/upload-rust-binary-action`'s own README rather than assumed: `bin-dir = "{ bin
+}{ binary-ext }"` is flat, with no wrapping subdirectory, because that action's
+`leading-dir` input defaults to `false`; and `pkg-url` hardcodes a literal `v` before every
+`{ version }` reference, because binstall has no `{ tag }` template variable at all, only
+the bare, unprefixed crate version — exactly the pattern binstall's own docs show for a
+project with `v`-prefixed tags like this one's.
+
+**A prepared-but-inert Homebrew formula, `packaging/homebrew/bhtune.rb`, deliberately not
+yet wired to a real tap repo.** Standing up `bytehound-labs/homebrew-bhtune` and computing
+real release checksums is deferred until closer to v1 — matching the "moderate effort"
+tier in "Key architectural decisions" — but the formula content itself costs nothing to
+write and review now. Supports only the two platforms the release matrix actually
+produces (Linux x86_64, macOS arm64); there is no Intel Mac or Linux ARM archive to point
+a formula at. Installs only the two binaries plus `LICENSE`/`README.md`, matching exactly
+what's in the release archive today — man pages and shell completions are deliberately
+left out rather than widening `release.yml`'s `include:` list to add them, since that
+input has no glob-pattern support (confirmed in `upload-rust-binary-action`'s own
+`action.yml`) and would need every one of `docs-generated-cli`'s auto-generated man pages
+named individually, which would drift out of sync with the entire point of generating
+them.
+
+**winget remains out of scope.** It requires PR-ing a manifest into Microsoft's community
+repo on every single release, which only makes sense once `pkg-windows-installer`'s NSIS
+installer is itself stable — revisit then, not before.
+
+**`bhtune-bin` publication remains intentionally conditional.** The generator produces a
+binary-only Arch package from an exact stable Linux release archive and immutable tag-pinned
+ancillary files. It generates `.SRCINFO` through non-root `makepkg --printsrcinfo`, validates
+every source checksum and package path, and exercises installation, upgrade, service-state,
+and removal preservation in disposable Arch environments. The reusable workflow supports
+dry-run validation for arbitrary refs without AUR credentials, but publication requires the
+real stable release assets, release evidence, AUR SSH credentials, and a clean expected AUR
+remote. No AUR package is publicly available until the first stable release and manual
+publication have completed. Debian's `depends = "$auto"` remains deliberate: package builds
+must run where `dpkg-shlibdeps` is available rather than substituting a stale hand-maintained
+dependency list.
 
 ## Deferred setup (deliberate, not oversights)
 

@@ -157,7 +157,7 @@ An accepted OPC write is not proof the controller moved. The confirmation rule i
 
 The Windows installer always installs `bhtune.exe` and `bhtune-server.exe`. It can also install a pinned, checksum-verified official 32-bit `opcda-bridge-gateway`; it never downloads a gateway at runtime. Base-installer and gateway-extension acceptance is recorded in [`docs/internal/design/windows-installer.md`](docs/internal/design/windows-installer.md). Attaching that installer to a stable release remains deferred until the coordinated release-workflow change.
 
-Release archives and the Docker image ship both binaries together; the Windows NSIS installer can include the optional gateway. The UI is browser-served, so there is no GUI toolkit to split out. See [`docs/internal/design/packaging-and-release.md`](docs/internal/design/packaging-and-release.md).
+Release archives, the Docker image, deb/rpm packages, and the guarded AUR package ship both binaries together. The UI is browser-served, so there is no GUI toolkit to split out. See [`docs/internal/design/packaging-and-release.md`](docs/internal/design/packaging-and-release.md).
 
 ## Live-plant safety hardening
 
@@ -255,7 +255,7 @@ Condensed register. Item numbers and decision tags match [`docs/internal/design/
 | [demo-mode.md](docs/internal/design/demo-mode.md)                                       | Public simulator Demo boundary and fixed limits.               |
 | [testing.md](docs/internal/design/testing.md)                                           | Simulator, Playwright, and release-matrix tests.               |
 | [validation-golden-replay.md](docs/internal/design/validation-golden-replay.md)         | Golden-master replay.                                          |
-| [packaging-and-release.md](docs/internal/design/packaging-and-release.md)               | Archives, Docker, and the Windows installer.                    |
+| [packaging-and-release.md](docs/internal/design/packaging-and-release.md)               | Archives, Docker, deb/rpm, and AUR.                            |
 | [windows-installer.md](docs/internal/design/windows-installer.md)                       | NSIS installer and optional gateway.                           |
 | [docs-site-and-generated-docs.md](docs/internal/design/docs-site-and-generated-docs.md) | Docs site, rustdoc, and the docs agent.                        |
 | [ci-and-hardening.md](docs/internal/design/ci-and-hardening.md)                         | CI, security workflows, and API compatibility.                 |

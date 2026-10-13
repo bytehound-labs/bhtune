@@ -24,7 +24,7 @@ pending. The state machine is fail-closed and keeps ownership explicit:
 - `release-plz` prepares git-only release changes and does not publish BHTune crates or create
   GitHub Releases.
 - `.github/workflows/release.yml` is the sole GitHub Release and artifact owner. It publishes
-  the supported platform archives, checksums, SBOM, provenance, and signatures
+  the supported platform archives, Linux packages, checksums, SBOM, provenance, and signatures
   for an approved tag.
 - Stable documentation snapshots are generated only for exact `X.Y.Z` versions, exclude
   `docs/internal/**`, and retain the newest three stable versions. Prerelease tags do not create
@@ -35,8 +35,8 @@ pending. The state machine is fail-closed and keeps ownership explicit:
 
 The remaining release work is operational rather than architectural: approve and validate a
 public RC, retain its canary evidence, complete the activation gates, and cut the first stable
-release. Crates.io publication is outside the current policy. Attaching the Windows NSIS
-installer to stable releases and any additional package-manager channels require separate work.
+release. Crates.io publication is outside the current policy. Windows MSI packaging, AUR
+publication, and any future registry channels remain separate follow-on work.
 
 ## Additional protocol drivers: OPC UA and Modbus
 

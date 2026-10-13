@@ -109,6 +109,20 @@ def _require_archives(archives: dict[str, Path]) -> None:
         )
 
 
+def _require_packages(assets_dir: Path) -> list[Path]:
+    debs = sorted(assets_dir.glob("*.deb"))
+    rpms = sorted(assets_dir.glob("*.rpm"))
+    if len(debs) != 1:
+        raise ArtifactVerificationError(
+            f"expected exactly one .deb package, found {len(debs)}"
+        )
+    if len(rpms) != 1:
+        raise ArtifactVerificationError(
+            f"expected exactly one .rpm package, found {len(rpms)}"
+        )
+    return [debs[0], rpms[0]]
+
+
 def _verify_evidence(
     assets_dir: Path, product_assets: list[Path]
 ) -> tuple[Path, Path, Path]:
@@ -161,7 +175,8 @@ def verify_release_assets(assets_dir: Path, tag: str) -> dict:
         raise ArtifactVerificationError(f"asset directory does not exist: {assets_dir}")
     archives = _archive_paths(assets_dir, tag)
     _require_archives(archives)
-    product_assets = list(archives.values())
+    packages = _require_packages(assets_dir)
+    product_assets = [*archives.values(), *packages]
     manifest_path, sbom_path, provenance_path = _verify_evidence(
         assets_dir, product_assets
     )
