@@ -25,9 +25,11 @@ dialog when no operation is pending.
 
 The OPC tag browser uses a keyboard-operable tree: Up and Down move between visible nodes,
 Home and End move to the first and last visible nodes, Left collapses or moves to the parent,
-and Right expands a branch or moves to its first child. Enter or Space selects an ItemID;
-Right expands branch-and-item nodes without changing their exact ItemID. The search field
-offers its indexed matches as an accessible listbox.
+and Right expands a branch or moves to its first child. Enter or Space selects an ItemID.
+Each branch arrow is a separate expand/collapse button that leaves tag selection unchanged,
+including for branch-and-item nodes. Clicking an arrow keeps keyboard focus on its tree row,
+so arrow-key navigation can continue. The search field offers its indexed matches as an
+accessible listbox.
 
 {/* web-ui-screenshot: full-tune-simulator */}
 <figure>

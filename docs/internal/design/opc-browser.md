@@ -135,7 +135,10 @@ suffix before writing it into the Tag name field, after a fresh read of the exac
 ItemID confirms `Good` quality. A non-Good result requires an explicit choice to select another tag
 or proceed anyway; a read failure leaves the browser open. Double-clicking a browsed or
 indexed-search selectable node performs the same selection, while double-clicking an expandable node
-expands or collapses it; branch-and-item nodes support both actions. Reopening the modal uses
+expands or collapses it; branch-and-item nodes support both actions. A branch's chevron is a
+separate button that toggles expansion without selecting or confirming its ItemID. It keeps
+focus on the tree row and follows the tree's disabled state, preserving roving keyboard
+navigation and avoiding an extra Tab stop per branch. Reopening the modal uses
 bridge-provided breadcrumbs or bounded search to reveal the current selection, then scrolls it into
 view; if the tag is no longer available, it falls back to the root level. The selection panel is
 rendered before a node is clicked, and the first loaded node is selected automatically. Its detailed

@@ -48,6 +48,11 @@ this restoration. It uses persistent indexed breadcrumbs when available and then
 live search beneath a matching server-returned root node before selecting an unrelated root item.
 It only uses unscoped live search when no root scope is available.
 
+Click a branch's arrow to expand or collapse its children without changing the selected tag.
+This also works for **branch + tag** rows, which have both an ItemID and children. Click a tag
+label to select its ItemID; double-click an expandable label to expand or collapse its children.
+Double-clicking a leaf performs the same quality-checked selection as **Select tag**.
+
 {/* web-ui-screenshot: full-tune-opc */}
 <figure>
   <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-opc.png?v=5cdc6b0c17d2">

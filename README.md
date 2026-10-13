@@ -65,7 +65,9 @@ database readiness or live-plant safety.
 
 The browser UI associates form labels, hints, and validation errors with their controls.
 Dialogs keep keyboard focus inside until they close, and the OPC tag tree supports keyboard
-navigation. Run status changes are announced politely. History filters and page offsets are
+navigation. Each branch arrow expands or collapses its children with a single click without
+changing the selected tag; tag labels retain selection and double-click behavior.
+Run status changes are announced politely. History filters and page offsets are
 stored in the URL, so a selected history view can be reloaded or shared. ItemIDs and run IDs
 have copy controls with success and failure feedback. PV and commanded-MV trends use concise
 legends and a hidden text description for screen readers; live measurements and cycle progress
