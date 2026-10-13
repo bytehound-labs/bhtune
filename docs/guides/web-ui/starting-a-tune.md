@@ -106,9 +106,12 @@ New and recreated indexes start with automatic refresh off. **Refresh Index** st
 build or retry without changing that choice. Click **Enable Auto-refresh** to opt in explicitly;
 the saved choice survives browser and gateway restarts. **Disable Auto-refresh** stops future
 scheduling without deleting indexed data or cancelling an active build. Use **Cancel Indexing**
-to stop that build. An enabled index with a reported next date shows the days-and-hours
-countdown; without a date it shows `not scheduled`. An opted-out index shows no countdown.
-Gateway maintenance, health, pacing, and retry protections remain in effect.
+to stop that build. A usable enabled index with a reported next date shows the days-and-hours
+countdown. When automatic refresh is enabled but no usable index exists and no build or deletion
+is active, the browser says `Auto-refresh: waiting for the first index; run Refresh Index once`;
+start the first build manually with **Refresh Index**. A usable index without a reported date
+shows `not scheduled`. An opted-out index shows no countdown. Gateway maintenance, health,
+pacing, and retry protections remain in effect.
 
 The search-index controls also expose **Delete Index** after a completed index build. Deletion
 is intentionally destructive: the first failed request leaves the index and enrollment intact,

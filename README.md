@@ -82,8 +82,10 @@ The OPC tag browser provides **Refresh Index**, **Cancel Indexing** during a bui
 New and recreated indexes start with automatic refresh off. Manual builds and retries do not
 change the saved choice; an explicit opt-in survives gateway restarts. Disabling it stops
 future scheduling without cancelling an active build or deleting cached tags.
-`Index: ready` describes cached search independently of scheduling. A days-and-hours countdown
-appears only for an enabled index with a gateway-reported next-refresh time.
+`Index: ready` describes cached search independently of scheduling. A usable enabled index shows
+a days-and-hours countdown when the gateway reports a next-refresh time. If auto-refresh is
+enabled but no usable index exists, the browser prompts you to run **Refresh Index** once; it never
+starts the first build automatically.
 
 ## Safety
 

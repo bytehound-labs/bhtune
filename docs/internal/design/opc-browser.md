@@ -48,12 +48,14 @@ back automatically to the slow live whole-server search. A failed tree page reta
 loaded nodes and exposes a per-level **Retry** action.
 New/recreated indexes default off; manual refresh and retry do not change a saved choice.
 **Enable Auto-refresh** and **Disable Auto-refresh** persist the selected server's choice
-without deleting the cache or cancelling an active build. When an opted-in index has a reported next date,
+without deleting the cache or cancelling an active build. When a usable opted-in index has a reported next date,
 the browser shows `Auto-refresh: enabled` with a days-and-hours countdown and the exact
-scheduled time in the hover tooltip. An enabled index without a reported date shows
-`Auto-refresh: not scheduled`; opt-out shows `disabled` and no countdown. The gateway has
-no `index.enabled`/`index.paused` override; maintenance, health, pacing, and retry protection
-remain independent safeguards. `Index: ready` describes cached search independently.
+scheduled time in the hover tooltip. An enabled index without a usable generation or active
+build/deletion shows `Auto-refresh: waiting for the first index; run Refresh Index once`; the
+first build remains manual. A usable index without a reported date shows
+`Auto-refresh: not scheduled`; opt-out shows `disabled` and no countdown. The gateway has no
+`index.enabled`/`index.paused` override; maintenance, health, pacing, and retry protection remain
+independent safeguards. `Index: ready` describes cached search independently.
 Unknown `/api/*` paths return JSON 404 responses instead of the SPA shell, making stale
 server/frontend combinations diagnosable.
 

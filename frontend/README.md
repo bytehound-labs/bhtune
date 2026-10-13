@@ -72,10 +72,12 @@ restarts; no gateway-wide opt-in override applies. Disable preserves cached sear
 active build. **Cancel Indexing** stops a build; **Delete Index** requires confirmation.
 
 `Index: ready` describes the usable cache independently of automatic refresh.
-`Auto-refresh: enabled` and its countdown require a true choice and a reported next date;
-an enabled index without a date shows `Auto-refresh: not scheduled`. An opted-out index shows
-`Auto-refresh: disabled` and no countdown. Pacing, maintenance, health, and retry protections
-remain gateway safeguards.
+When automatic refresh is enabled but no usable index exists and no build or deletion is active,
+the browser shows `Auto-refresh: waiting for the first index; run Refresh Index once`. The first
+build remains manual. For a usable index, `Auto-refresh: enabled` and its countdown require a true
+choice and a reported next date; an enabled index without a date shows
+`Auto-refresh: not scheduled`. An opted-out index shows `Auto-refresh: disabled` and no countdown.
+Pacing, maintenance, health, and retry protections remain gateway safeguards.
 
 Built-in and catalog templates can't be edited through the UI — they're re-seeded from
 their source file on every server startup, so an edit would just be discarded — but they

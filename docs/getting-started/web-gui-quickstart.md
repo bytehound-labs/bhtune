@@ -188,13 +188,16 @@ browser-visible origin.
      operations remain available. Completed non-fatal inventory diagnostics remain available
      through the gateway/API and diagnostic CLI; the browser shows the gateway's failure
      diagnostic on its own line for a failed index state. `Index: ready` means the existing
-     index is usable, not that automatic refresh is running. When the opted-in server has a
+     index is usable, not that automatic refresh is running. When a usable opted-in index has a
      reported next date, `Auto-refresh: enabled` appears with a
      relative days-and-hours countdown and the exact scheduled time on hover. An opted-in
-     server without a reported date shows `Auto-refresh: not scheduled`; a server that is not
-     opted in shows `Auto-refresh: disabled` and no countdown. Disable does not cancel an active
-     build; use **Cancel Indexing** for that operation. Maintenance windows, foreground/health
-     protection, pacing, storage checks, and retry backoff still govern automatic work.
+     server without a usable index or active build/deletion shows
+     `Auto-refresh: waiting for the first index; run Refresh Index once`; the first build is
+     manual. A usable index without a reported date shows `Auto-refresh: not scheduled`; a
+     server that is not opted in shows `Auto-refresh: disabled` and no countdown. Disable does not
+     cancel an active build; use **Cancel Indexing** for that operation. Maintenance windows,
+     foreground/health protection, pacing, storage checks, and retry backoff still govern
+     automatic work.
 
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail
