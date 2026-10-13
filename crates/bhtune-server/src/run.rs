@@ -395,6 +395,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_server_fails_with_recreate_guidance_for_pre_squash_history() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("bhtune.toml");
+        let db_path = dir.path().join("pre-squash.db");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&db_path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE _sqlx_migrations (\
+                version BIGINT PRIMARY KEY, description TEXT NOT NULL, \
+                installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, \
+                success BOOLEAN NOT NULL, checksum BLOB NOT NULL, execution_time BIGINT NOT NULL\
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+             VALUES (1, 'initial schema', TRUE, zeroblob(48), 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+        std::fs::write(
+            &config_path,
+            format!(
+                "server_mode = \"full\"\nbind = \"127.0.0.1:0\"\ndb = {db_path:?}\n\
+                 [log]\ndir = {:?}\n",
+                dir.path().join("logs")
+            ),
+        )
+        .unwrap();
+
+        let error = build_server(Some(&config_path)).await.err().unwrap();
+        let message = error.to_string();
+        assert!(message.contains(&db_path.display().to_string()));
+        assert!(message.contains("incompatible migration history"));
+        assert!(message.contains("back it up"));
+        assert!(message.contains("new database file"));
+        assert!(!message.contains("failed to run database migrations"));
+    }
+
+    #[tokio::test]
     async fn build_server_rejects_an_insecure_non_loopback_demo_origin_before_opening_the_db() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("bhtune.toml");

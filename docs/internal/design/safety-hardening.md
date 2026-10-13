@@ -315,10 +315,9 @@ CtrlC` handle passed down into the tick body's `bounded_driver_call`s, which is 
     `TuneRunRow::record_initial_readings` persists the initial mode, mode attribute, and
     applicable setpoint alongside the PV/MV/range readings. `tune_runs.restore_status` and
     `restore_detail` describe the ordinary tune restore; `recovery_state` and
-    `recovery_evidence_json` describe eligibility and evidence for a later recovery. Migration
-    `0003_live_recovery.sql` adds these fields and the `live_operation_owners`,
-    `live_operation_claims`, `live_mutation_steps`, and `tune_recovery_attempts` audit
-    tables.
+    `recovery_evidence_json` describe eligibility and evidence for a later recovery. The
+    consolidated schema includes these fields and the `live_operation_owners`,
+    `live_operation_claims`, `live_mutation_steps`, and `tune_recovery_attempts` audit tables.
 
     Every live mutation and recovery holds an OS-level exclusive lock for the canonical
     database and a conditional SQLite claim keyed by the canonical database and controller/MV
@@ -425,8 +424,8 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
     `rollback_error`. The existing `proportional_written`/`integral_written`/
     `derivative_written` columns were relaxed from `NOT NULL` to nullable, since a partial
     write can now leave a later constant's `written`/`readback` genuinely absent rather than
-    forced to some placeholder value — added to the one pre-release migration in place,
-    since nothing has shipped yet.
+    forced to some placeholder value. These columns remain nullable because partial writes
+    are reachable outcomes, not legacy compatibility cases.
 
   **Testing approach.** `MockDriver` gained three more builders alongside the existing
   `degrade_quality_after`: `erroring_read_after`/`rejecting_write_after` (a tag's first N
@@ -529,13 +528,12 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
   subprocess-level "stdout is exactly one JSON object" contract remains
   `safety-json-contract`'s responsibility, not re-proven per command here).
 
-- **`bhtune-db`'s `restore_from` is now safe under an active WAL and requires exclusive
+- **`bhtune-db`'s `restore_from` is safe under an active WAL and requires exclusive
   access before restoring** — done (`bhtune_db::backup::exclusive_pre_restore_snapshot`,
   `EXCLUSIVITY_PROBE_TIMEOUT`, `DbError::DatabaseInUse`). This finding predates any CLI
-  command actually calling `restore_from`/`backup_to` (both remain library-only APIs, per
+  command calling `restore_from`/`backup_to` (both remain library-only APIs, per
   `db-backup-restore`) — genuinely proactive hardening rather than a fix to a shipping
-  path, but sequenced here rather than deferred since Phase 6.6's template catalog work
-  edits the same pre-release migration findings 6 and 9 already touch. Previously the
+  path and represented in the consolidated pre-v0.1 schema. Previously the
   pre-restore safety copy used a raw `std::fs::copy`, and SQLite only auto-checkpoints a
   WAL when the _actual last connection to the file across the whole system_ closes — not
   merely the last connection in the caller's own pool — so a copy taken while a second

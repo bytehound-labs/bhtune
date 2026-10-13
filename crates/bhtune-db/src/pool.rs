@@ -21,10 +21,13 @@ use crate::error::{DbError, DbResult};
 /// actually deadlocked.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 /// Opens (creating if missing) the SQLite database at `path`, applies the standard pragmas,
-/// and runs any pending migrations. This is the only supported way to get a `SqlitePool` in
-/// bhtune — every caller (CLI, web server, tests) goes through this function so the pragmas and
-/// migration state can never drift between adapters.
+/// rejects incompatible migration histories, and runs pending migrations. This is
+/// the only supported way to get a `SqlitePool` in bhtune — every caller (CLI, web server,
+/// tests) goes through this function so the pragmas and migration state can never drift
+/// between adapters.
 pub async fn connect(path: &Path) -> DbResult<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(path)
@@ -38,16 +41,17 @@ pub async fn connect(path: &Path) -> DbResult<SqlitePool> {
         .await
         .map_err(DbError::Connect)?;
 
-    run_migrations(&pool).await?;
+    run_migrations(&pool, path).await?;
 
     Ok(pool)
 }
 
 /// Opens an existing SQLite database without creating it or applying migrations.
 ///
-/// This is for commands that need a snapshot of persisted settings but must not mutate the
-/// database as a side effect. Callers must not use the returned pool for writes; SQLite opens
-/// it in read-only mode and rejects them.
+/// Incompatible migration history is rejected before returning the pool. This is for commands
+/// that need a snapshot of persisted settings but must not mutate the database as a side effect.
+/// Callers must not use the returned pool for writes; SQLite opens it in read-only mode and
+/// rejects them.
 pub async fn connect_read_only(path: &Path) -> DbResult<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(path)
@@ -55,11 +59,18 @@ pub async fn connect_read_only(path: &Path) -> DbResult<SqlitePool> {
         .busy_timeout(BUSY_TIMEOUT)
         .foreign_keys(true);
 
-    SqlitePoolOptions::new()
+    let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(options)
         .await
-        .map_err(DbError::Connect)
+        .map_err(DbError::Connect)?;
+
+    if let Err(error) = validate_migration_history(&pool, path).await {
+        pool.close().await;
+        return Err(error);
+    }
+
+    Ok(pool)
 }
 
 /// Returns the filesystem path attached to SQLite's `main` database, or
@@ -119,16 +130,42 @@ pub async fn connect_in_memory() -> DbResult<SqlitePool> {
         .await
         .map_err(DbError::Connect)?;
 
-    run_migrations(&pool).await?;
+    run_migrations(&pool, Path::new(":memory:")).await?;
 
     Ok(pool)
 }
 
-async fn run_migrations(pool: &SqlitePool) -> DbResult<()> {
-    sqlx::migrate!("./migrations")
-        .run(pool)
+async fn run_migrations(pool: &SqlitePool, path: &Path) -> DbResult<()> {
+    validate_migration_history(pool, path).await?;
+    MIGRATOR.run(pool).await.map_err(DbError::Migrate)
+}
+
+pub(crate) async fn validate_migration_history(pool: &SqlitePool, path: &Path) -> DbResult<()> {
+    let has_migration_table: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = '_sqlx_migrations')",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(DbError::Query)?;
+    if has_migration_table == 0 {
+        return Ok(());
+    }
+
+    for row in sqlx::query("SELECT version, checksum FROM _sqlx_migrations ORDER BY version")
+        .fetch_all(pool)
         .await
-        .map_err(DbError::Migrate)
+        .map_err(DbError::Query)?
+    {
+        let version: i64 = row.try_get("version").map_err(DbError::Query)?;
+        let checksum: Vec<u8> = row.try_get("checksum").map_err(DbError::Query)?;
+        if !MIGRATOR.iter().any(|migration| {
+            migration.version == version && migration.checksum.as_ref() == checksum.as_slice()
+        }) {
+            return Err(DbError::IncompatibleMigrationHistory(path.to_path_buf()));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -179,7 +216,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 4);
+        assert_eq!(migration_count, 1);
     }
 
     #[tokio::test]
@@ -234,7 +271,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 4);
+        assert_eq!(migration_count, 1);
 
         assert!(
             sqlx::query("DELETE FROM tune_runs")
@@ -253,7 +290,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 4);
+        assert_eq!(migration_count, 1);
 
         let (migration_version,): (i64,) = sqlx::query_as(
             "SELECT version FROM _sqlx_migrations WHERE success = 1 ORDER BY version DESC LIMIT 1",
@@ -261,7 +298,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(migration_version, 4);
+        assert_eq!(migration_version, 1);
     }
 
     #[tokio::test]

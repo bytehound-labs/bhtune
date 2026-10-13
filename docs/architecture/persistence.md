@@ -10,14 +10,18 @@ does not encrypt it or provide per-row access control. The CLI and server use `b
 the same schema and repository operations.
 
 The schema is embedded and applied through SQLx migrations when the database is opened. The
-pre-v0.1 schema is represented by one consolidated migration,
-`crates/bhtune-db/migrations/0001_initial_schema.sql`. This is the development baseline while
-no supported user-held or deployed database depends on intermediate migration history.
+pre-v0.1 schema is represented by one baseline migration,
+`crates/bhtune-db/migrations/0001_initial.sql`. Writable and read-only opens compare every
+SQLx migration-history version/checksum pair with the embedded set before migration or use.
+A database from the earlier
+pre-release migration chain is rejected with its path and backup-and-recreate guidance; BHTune
+does not rewrite migration history, delete the database, or attempt a partial migration.
+Preserve a verified backup and use a new database file.
 
-Before v0.1, the migration baseline may be consolidated while its databases remain disposable
-and no supported database depends on the old history. Once v0.1 establishes a supported
-database format, applied migration history is a compatibility contract: schema changes use
-new forward migrations rather than editing an already-applied migration.
+While no supported database format exists, the pre-v0.1 baseline may be consolidated and
+earlier pre-release databases remain unsupported. Once v0.1 establishes a supported database
+format, applied migration history is a compatibility contract: schema changes use new forward
+migrations rather than editing an already-applied migration.
 
 For database backup and restore behavior, see the
 [Safety guide's recovery boundaries](../guides/safety.md#packaging-and-database-recovery-boundaries)

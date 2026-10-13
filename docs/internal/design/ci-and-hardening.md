@@ -141,10 +141,14 @@ The repository now has a layered hardening gate for both source changes and rele
   the base revision for breaking changes, so compatibility requires review against the existing
   contract.
 - **Database compatibility.** Before v0.1, the migrations directory contains one consolidated
-  `0001_initial_schema.sql` describing the complete current schema. Fresh-schema tests verify
-  the single recorded migration plus the final indexes, checked-result constraints, Demo
-  ownership triggers, and MV actuation audit table. While no supported external database
-  depends on the pre-release history, another squash is allowed; local and test databases are
-  disposable and may need recreation. Once v0.1 ships or a database is distributed or
-  supported outside development, applied migration history becomes a compatibility contract and
-  future schema changes must use new forward migrations rather than editing `0001`.
+  `0001_initial.sql` describing the complete current schema. Schema tests compare the old
+  migration chain with the baseline across `sqlite_schema`, columns, indexes, foreign keys,
+  `CHECK` constraints, and triggers. Before migration or read-only use, `connect()` and
+  `connect_read_only()` reject a migration-history entry whose version/checksum pair is not
+  embedded, including dirty
+  pre-squash entries. Earlier pre-release databases must be backed up and recreated;
+  `_sqlx_migrations` is never rewritten automatically. While no supported external database
+  depends on the pre-release history, another squash is allowed. Once v0.1 ships or a database
+  is distributed or supported outside development,
+  applied migration history becomes a compatibility contract and future schema changes must
+  use new forward migrations rather than editing `0001`.

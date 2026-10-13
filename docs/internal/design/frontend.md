@@ -374,7 +374,8 @@ failures remain visible.
 ## New Run and run-detail UX summary
 
 `rename-driver` renamed `backend` → `driver` across every crate, the CLI flag, the HTTP JSON field,
-and the `tune_runs` schema, edited into migration `0001` in place since nothing had shipped yet.
+and the `tune_runs` schema, represented in the pre-v0.1 baseline because no supported database
+depends on the earlier migration history.
 `db-run-request-snapshot` added flat `opc_server`/`bridge_host` columns plus a `request_json`
 snapshot to `tune_runs`, fixing a latent safety bug where `history revert` could re-resolve a
 different DCS server than the run actually used. `ui-simulator-greyout`,

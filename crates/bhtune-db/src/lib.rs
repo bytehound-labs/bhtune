@@ -15,8 +15,8 @@
 //! - [`error`] — the crate's error type, [`error::DbError`].
 //!
 //! Tables: `dcs_templates`, `loops`, `tune_runs`, `tune_samples`, `tune_results`,
-//! `tune_mv_actuations`, `tune_writes`, `settings` — see the migration files for the full
-//! schema and the rationale behind each design decision (nullability, JSON-vs-columns,
+//! `tune_mv_actuations`, `tune_writes`, `settings` — see the embedded baseline migration for
+//! the full schema and the rationale behind each design decision (nullability, JSON-vs-columns,
 //! cascade rules).
 
 #![cfg_attr(

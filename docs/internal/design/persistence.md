@@ -27,10 +27,10 @@ IN (...))` constraint using the exact same literals, so an invalid value can nev
   rather than deciding case-by-case. `tune_runs`'s own `template_name`/`template_origin`
   (flat) plus `template_snapshot_json`/`tags_json` (JSON) columns (`safety-run-snapshot`, see
   "Live-plant safety hardening" below) are a second application of the exact same rule.
-- **Live ownership and recovery are structured, additive evidence.** Migration
-  `0003_live_recovery.sql` adds owner and canonical-resource claim tables, per-mutation audit
-  rows, recovery-attempt audit, and `tune_runs.recovery_state`/
-  `recovery_evidence_json`. Heartbeat age, process identifiers, and error text do not establish
+- **Live ownership and recovery are structured, additive evidence.** The consolidated
+  pre-v0.1 schema includes owner and canonical-resource claim tables, per-mutation audit rows,
+  recovery-attempt audit, and `tune_runs.recovery_state`/`recovery_evidence_json`. Heartbeat
+  age, process identifiers, and error text do not establish
   orphan eligibility. Recovery requires the persisted ownership claim, initial readings,
   recorded connection and resource identity, effective restore policy, and mutation evidence;
   legacy rows without that evidence remain ineligible. Startup exports affected evidence
@@ -41,10 +41,9 @@ IN (...))` constraint using the exact same literals, so an invalid value can nev
   tables.** A run can produce three calculated candidate results and zero or more writes;
   conflating "the tool suggested this" with "this went into the controller" would lose the one
   fact the legacy CSV logs never captured — see `history-writeback-audit`.
-- **Template PID precision is explicit and snapshotted.** Migration
-  `0004_pid_rounding.sql` adds constrained `pid_rounding_kind` and
-  `pid_rounding_digits` columns without changing earlier migration checksums.
-  Run template snapshots include their precision policy; missing snapshot
+- **Template PID precision is explicit and snapshotted.** The consolidated pre-v0.1 schema
+  includes constrained `pid_rounding_kind` and `pid_rounding_digits` columns. Run template
+  snapshots include their precision policy; missing snapshot
   precision is not inferred from a template name. Raw result columns remain
   unrounded. Requested write columns contain rounded active controller terms
   and exact disabled-term sentinels; previous and readback columns remain
@@ -121,7 +120,8 @@ derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
   ones with no backing connection (crash leftovers, or files copied in from elsewhere); the test
   covering this simulates exactly that case rather than the (already self-cleaning) graceful
   case. Finally, `db_path` is reopened via the ordinary `connect()`, so any migrations the
-  backup predates are re-applied going forward — restoring an old backup transparently upgrades
-  its schema, the same as opening an old database file normally would. Production filesystem
-  checks and replacement use Tokio's asynchronous filesystem APIs; synchronous filesystem
-  calls remain limited to test setup and assertions.
+  backup predates are applied only when its recorded history is compatible with the embedded
+  migration set. `restore_from` checks a backup's migration history before closing the live
+  pool or replacing its file; an earlier pre-squash backup is rejected and the live database
+  remains untouched. Production filesystem checks and replacement use Tokio's asynchronous
+  filesystem APIs; synchronous filesystem calls remain limited to test setup and assertions.

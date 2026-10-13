@@ -102,7 +102,7 @@ mod tests {
 
     /// Round-trips every variant of every `bhtune-core` enum stored in the database, and
     /// pins the exact literal each one produces. These literals must stay in sync with the
-    /// `CHECK (... IN (...))` lists in `migrations/0001_initial_schema.sql` — this test is
+    /// `CHECK (... IN (...))` lists in `migrations/0001_initial.sql` — this test is
     /// the one place both are written down side by side, so a rename on either side is easy
     /// to spot and fix in the other.
     #[test]
