@@ -3,6 +3,9 @@
 BHTune is an open-source PID auto-tuner for industrial DCS/PLC loops that runs Modified Relay
 Feedback Tests (MRFT) and calculates PID constants for operator review.
 
+MRFT periods retain sub-second precision, and result extrema include relay-switch samples. The
+engine follows one corrected calculation path, without legacy bug-emulation modes.
+
 ## Features
 
 - **Runs on Linux, macOS, and Windows.** BHTune itself has no Windows or COM requirement.
