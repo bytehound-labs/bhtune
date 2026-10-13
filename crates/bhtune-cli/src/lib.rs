@@ -336,6 +336,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_with_cli_returns_failure_for_pre_squash_migration_history() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+        let (dir, db) = temp_db_path();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&db)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE _sqlx_migrations (\
+                version BIGINT PRIMARY KEY, description TEXT NOT NULL, \
+                installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, \
+                success BOOLEAN NOT NULL, checksum BLOB NOT NULL, execution_time BIGINT NOT NULL\
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+             VALUES (1, 'initial schema', TRUE, zeroblob(48), 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+        let config = dir.path().join("bhtune.toml");
+        std::fs::write(&config, "").unwrap();
+
+        let exit_code = run_with_cli(Cli {
+            db: Some(db.clone()),
+            config: Some(config),
+            templates: None,
+            retention_days: None,
+            log_level: None,
+            log_dir: Some(dir.path().join("logs")),
+            log_format: None,
+            log_rotation: None,
+            command: Command::Template {
+                command: crate::args::TemplateCommand::List,
+            },
+        })
+        .await;
+
+        assert_eq!(exit_code, ExitCode::FAILURE);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(SqliteConnectOptions::new().filename(&db).read_only(true))
+            .await
+            .unwrap();
+        let migrated_tables: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'tune_runs'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(migrated_tables, 0);
+    }
+
+    #[tokio::test]
     async fn run_with_cli_config_load_failure_is_exit_failure() {
         // An existing *file* occupying where a parent directory needs to go is a hard,
         // portable error: `db::ensure_parent_dir`'s `create_dir_all` auto-creates a merely

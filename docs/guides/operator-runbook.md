@@ -446,6 +446,12 @@ package logs, and use an independently verified backup. The Windows installer ca
 an external database, and package/manual archive installs do not provide an automatic database
 rollback.
 
+If startup or a read-only check reports an incompatible migration history, the database belongs
+to an earlier pre-release schema baseline. Stop all BHTune processes, make and verify an
+independent SQLite backup, then configure a new empty database file. Keep the old database and
+backup for archival; do not edit `_sqlx_migrations` or delete the old file to bypass the check.
+BHTune does not migrate the earlier pre-release schema or import its history automatically.
+
 For a Windows gateway failure, also preserve the exact gateway service definition, PID and
 command line, TCP `7600` listener ownership, installed executable hash, configuration, index
 database and sidecars, build metadata, and gateway logs. Do not kill a process by name; stop the

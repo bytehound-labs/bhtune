@@ -4,8 +4,12 @@ SQLite persistence for BHTune templates, loop configuration, run history, tuning
 write audits, and settings. The crate provides database connection helpers, embedded schema
 migrations, typed repository APIs, and whole-database backup and restore operations.
 
-`connect_read_only` opens an existing database without creating it or applying migrations;
-SQL write statements are rejected by SQLite on that connection.
+`connect` applies the embedded schema to fresh databases and rejects incompatible SQLx
+migration histories. Preserve a verified backup and use a new database file; incompatible
+history is never rewritten automatically.
+
+`connect_read_only` opens an existing database without creating it or applying migrations. It
+rejects incompatible migration history, and SQL write statements are rejected by SQLite.
 
 Template precision is stored in constrained kind/count columns and copied into each
 run's template snapshot. Calculated results remain full precision; PID write audits

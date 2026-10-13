@@ -19,7 +19,7 @@ use sqlx::{
 
 use crate::{
     error::{DbError, DbResult},
-    pool::connect,
+    pool::{connect, connect_read_only},
 };
 
 /// How long the pre-restore exclusivity probe waits on a lock before concluding another
@@ -80,9 +80,9 @@ pub struct RestoreOutcome {
 /// [`RestoreOutcome::pool`].
 ///
 /// Safety, in order:
-/// 1. `backup_path` is validated (`PRAGMA integrity_check`, plus confirming a real
-///    `tune_runs` table exists) *before* anything about the live database is touched, so a
-///    corrupt or unrelated file never gets a chance to destroy good data.
+/// 1. `backup_path` is validated (`PRAGMA integrity_check`, a real `tune_runs` table, and
+///    compatible migration history) *before* anything about the live database is touched,
+///    so a corrupt, unrelated, or pre-squash file never gets a chance to destroy good data.
 /// 2. The caller's own connections to `db_path` are closed first, so step 3's exclusivity
 ///    check isn't confused by this process's own still-open pool.
 /// 3. If `db_path` already exists, `exclusive_pre_restore_snapshot` both confirms no other
@@ -102,9 +102,7 @@ pub struct RestoreOutcome {
 /// 5. Any stale `-wal`/`-shm` sidecar files left over from the old `db_path` are removed —
 ///    they describe uncommitted changes to a database that, after step 4, no longer exists
 ///    at that path.
-/// 6. `db_path` is reopened via [`connect`], which reapplies the standard pragmas and runs
-///    any migrations the backup predates forward — restoring an older backup transparently
-///    upgrades its schema, exactly as opening an old database file normally would.
+/// 6. Supported backups are reopened via [`connect`] to apply standard pragmas.
 ///
 /// Restoring while *another* bhtune process (for instance `bhtune-server`, running
 /// alongside the CLI) has `db_path` open returns [`DbError::DatabaseInUse`] instead of
@@ -117,6 +115,8 @@ pub async fn restore_from(
     now: DateTime<Utc>,
 ) -> DbResult<RestoreOutcome> {
     validate_backup_file(backup_path).await?;
+    let backup_pool = connect_read_only(backup_path).await?;
+    backup_pool.close().await;
 
     // Wait for every connection to be gracefully closed (not just dropped) before touching
     // the file at the OS level — an open file handle can otherwise block the rename/delete

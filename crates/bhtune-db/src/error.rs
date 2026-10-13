@@ -10,6 +10,15 @@ pub enum DbError {
     #[error("failed to run database migrations: {0}")]
     Migrate(#[source] sqlx::migrate::MigrateError),
 
+    /// The database records a migration history entry that is not part of the embedded set
+    /// or has a different checksum. Preserve the old database and use a new database file
+    /// rather than applying the embedded schema over its migration history.
+    #[error(
+        "database at {} has an incompatible migration history; back it up and configure a new database file before using this version",
+        .0.display()
+    )]
+    IncompatibleMigrationHistory(std::path::PathBuf),
+
     #[error("database query failed: {0}")]
     Query(#[source] sqlx::Error),
 

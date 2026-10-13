@@ -44,6 +44,11 @@ Release packaging includes platform archives, Debian/RPM packages, AUR, Docker, 
 installer. macOS packaging includes a launchd job and a Homebrew formula template that requires
 a tap and verified stable-release checksums before installation.
 
+The pre-v0.1 schema baseline does not migrate databases created by earlier pre-release builds.
+Before switching versions, preserve a verified SQLite backup and configure a new database
+file. BHTune reports incompatible migration history without applying migrations or deleting
+the old database.
+
 The Windows distribution uses an NSIS installer for the CLI and web server, with an optional
 verified OPC DA gateway component. Installer validation covers external SQLite databases and
 WAL-preserving rollback fixtures under the service account.

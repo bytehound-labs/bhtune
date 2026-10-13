@@ -235,11 +235,11 @@ contract.
 
 The `backend` → `driver` rename landed across the entire workspace (crate, trait, error types, every
 concrete driver, the `--driver` CLI flag, the HTTP/OpenAPI `driver` field, and the frontend), with
-migration `0001` edited in place — the crate map and every other section below already use
-`driver`/`bhtune-driver` terminology throughout as a result. `db-run-request-snapshot`: `tune_runs`
-gained `opc_server`/`bridge_host` (flat, nullable columns — `NULL`/`NULL` for a non-opcda run) and
-`request_json` (the complete run request exactly as submitted, before any config-driven defaulting),
-added to the same in-place `0001` migration `rename-driver` had just edited.
+the pre-v0.1 baseline schema updated in the same change. The crate map and every other section
+below use `driver`/`bhtune-driver` terminology throughout as a result. `db-run-request-snapshot`:
+`tune_runs` gained `opc_server`/`bridge_host` (flat, nullable columns — `NULL`/`NULL` for a
+non-opcda run) and `request_json` (the complete run request exactly as submitted, before any
+config-driven defaulting), added to that baseline.
 `TuneRunRow::record_connection` populates all three via a follow-up `UPDATE` right after `start()`,
 matching `record_initial_readings`/`record_allow_uncertain_quality`'s existing precedent, and
 runtime `prepare()` calls it immediately, before any driver I/O. This closes a real latent

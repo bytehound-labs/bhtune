@@ -1,5 +1,5 @@
-//! Integration tests proving the migrations in `migrations/` actually behave the way their
-//! comments claim: every table exists, `CHECK` constraints reject bad data, `ON DELETE
+//! Integration tests proving the schema in `migrations/` actually behaves as intended:
+//! every table exists, `CHECK` constraints reject bad data, `ON DELETE
 //! CASCADE`/`SET NULL`/`RESTRICT` behave per-relationship as designed, and a real
 //! `bhtune-core` value (a built-in `DcsTemplate`, a derived `LoopTags`) round-trips through
 //! its column/JSON-blob storage exactly.
@@ -16,11 +16,411 @@ use bhtune_core::{
     built_in_templates,
 };
 use bhtune_db::{
-    DbError, connect_in_memory,
+    DbError, backup_to, connect, connect_in_memory, connect_read_only,
     models::{DcsTemplateRow, TemplateOrigin, TuneDriver, TuneRunRow},
+    restore_from,
 };
 use chrono::Utc;
-use sqlx::Row;
+use sqlx::{
+    Row, SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
+use std::path::Path;
+
+static PRE_SQUASH_MIGRATOR: sqlx::migrate::Migrator =
+    sqlx::migrate!("./tests/fixtures/pre_squash_migrations");
+
+type ColumnMetadata = (String, i64, String, String, i64, Option<String>, i64);
+type IndexColumnMetadata = (
+    String,
+    String,
+    i64,
+    i64,
+    Option<String>,
+    i64,
+    Option<String>,
+    i64,
+);
+type ForeignKeyMetadata = (
+    String,
+    i64,
+    i64,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+);
+
+#[derive(Debug, PartialEq, Eq)]
+struct SchemaSnapshot {
+    objects: Vec<(String, String, String, Option<String>)>,
+    columns: Vec<ColumnMetadata>,
+    indexes: Vec<(String, String, i64, String, i64)>,
+    index_columns: Vec<IndexColumnMetadata>,
+    foreign_keys: Vec<ForeignKeyMetadata>,
+    checked_tables: Vec<(String, String)>,
+    triggers: Vec<(String, String, String)>,
+}
+
+fn normalize_sql(sql: &str) -> String {
+    let mut normalized = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    let mut quote = None;
+    let mut pending_space = false;
+
+    while let Some(ch) = chars.next() {
+        if let Some(end_quote) = quote {
+            normalized.push(ch);
+            if ch == end_quote {
+                if chars.peek() == Some(&end_quote) {
+                    normalized.push(chars.next().unwrap());
+                } else {
+                    quote = None;
+                }
+            }
+            continue;
+        }
+        if ch == '-' && chars.peek() == Some(&'-') {
+            chars.next();
+            for comment_char in chars.by_ref() {
+                if comment_char == '\n' {
+                    pending_space = true;
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut previous_star = false;
+            for comment_char in chars.by_ref() {
+                if previous_star && comment_char == '/' {
+                    pending_space = true;
+                    break;
+                }
+                previous_star = comment_char == '*';
+            }
+            continue;
+        }
+        if ch.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if matches!(ch, '\'' | '"' | '`' | '[') {
+            if pending_space && !normalized.is_empty() && !normalized.ends_with('(') {
+                normalized.push(' ');
+            }
+            pending_space = false;
+            quote = Some(if ch == '[' { ']' } else { ch });
+            normalized.push(ch);
+            continue;
+        }
+        if matches!(ch, ',' | ')') {
+            while normalized.ends_with(' ') {
+                normalized.pop();
+            }
+            normalized.push(ch);
+            pending_space = true;
+            continue;
+        }
+        if pending_space && !normalized.is_empty() && !normalized.ends_with('(') {
+            normalized.push(' ');
+        }
+        pending_space = false;
+        normalized.push(ch);
+    }
+
+    normalized.trim().to_string()
+}
+
+async fn schema_snapshot(pool: &SqlitePool) -> SchemaSnapshot {
+    let mut snapshot = SchemaSnapshot {
+        objects: Vec::new(),
+        columns: Vec::new(),
+        indexes: Vec::new(),
+        index_columns: Vec::new(),
+        foreign_keys: Vec::new(),
+        checked_tables: Vec::new(),
+        triggers: Vec::new(),
+    };
+
+    for row in
+        sqlx::query("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    {
+        let object_type: String = row.try_get("type").unwrap();
+        let name: String = row.try_get("name").unwrap();
+        let table: String = row.try_get("tbl_name").unwrap();
+        let sql: Option<String> = row.try_get("sql").unwrap();
+        let normalized_sql = sql.map(|sql| normalize_sql(&sql));
+        if object_type == "table"
+            && normalized_sql
+                .as_ref()
+                .is_some_and(|sql| sql.to_ascii_lowercase().contains("check"))
+        {
+            snapshot
+                .checked_tables
+                .push((name.clone(), normalized_sql.clone().unwrap()));
+        }
+        snapshot
+            .objects
+            .push((object_type, name, table, normalized_sql));
+    }
+
+    let tables: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    for table in tables {
+        for row in sqlx::query(
+            "SELECT cid, name, type, \"notnull\" AS is_not_null, dflt_value, pk \
+             FROM pragma_table_info(?) ORDER BY cid",
+        )
+        .bind(&table)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        {
+            snapshot.columns.push((
+                table.clone(),
+                row.try_get("cid").unwrap(),
+                row.try_get("name").unwrap(),
+                row.try_get("type").unwrap(),
+                row.try_get("is_not_null").unwrap(),
+                row.try_get("dflt_value").unwrap(),
+                row.try_get("pk").unwrap(),
+            ));
+        }
+
+        for row in sqlx::query(
+            "SELECT name, \"unique\" AS is_unique, origin, partial \
+             FROM pragma_index_list(?) ORDER BY name",
+        )
+        .bind(&table)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        {
+            let name: String = row.try_get("name").unwrap();
+            snapshot.indexes.push((
+                table.clone(),
+                name.clone(),
+                row.try_get("is_unique").unwrap(),
+                row.try_get("origin").unwrap(),
+                row.try_get("partial").unwrap(),
+            ));
+            for index_row in sqlx::query(
+                "SELECT seqno, cid, name, \"desc\" AS sort_desc, coll, \"key\" AS is_key \
+                 FROM pragma_index_xinfo(?) ORDER BY seqno",
+            )
+            .bind(&name)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            {
+                snapshot.index_columns.push((
+                    table.clone(),
+                    name.clone(),
+                    index_row.try_get("seqno").unwrap(),
+                    index_row.try_get("cid").unwrap(),
+                    index_row.try_get("name").unwrap(),
+                    index_row.try_get("sort_desc").unwrap(),
+                    index_row.try_get("coll").unwrap(),
+                    index_row.try_get("is_key").unwrap(),
+                ));
+            }
+        }
+
+        for row in sqlx::query(
+            "SELECT id, seq, \"table\" AS referenced_table, \"from\" AS source_column, \
+             \"to\" AS target_column, on_update, on_delete, \"match\" AS match_rule \
+             FROM pragma_foreign_key_list(?) ORDER BY id, seq",
+        )
+        .bind(&table)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        {
+            snapshot.foreign_keys.push((
+                table.clone(),
+                row.try_get("id").unwrap(),
+                row.try_get("seq").unwrap(),
+                row.try_get("referenced_table").unwrap(),
+                row.try_get("source_column").unwrap(),
+                row.try_get("target_column").unwrap(),
+                row.try_get("on_update").unwrap(),
+                row.try_get("on_delete").unwrap(),
+                row.try_get("match_rule").unwrap(),
+            ));
+        }
+    }
+
+    for row in sqlx::query(
+        "SELECT name, tbl_name, sql FROM sqlite_schema WHERE type = 'trigger' ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    {
+        snapshot.triggers.push((
+            row.try_get("name").unwrap(),
+            row.try_get("tbl_name").unwrap(),
+            normalize_sql(&row.try_get::<String, _>("sql").unwrap()),
+        ));
+    }
+
+    snapshot.indexes.sort();
+    snapshot.index_columns.sort();
+    snapshot.foreign_keys.sort();
+    snapshot
+}
+
+async fn open_pre_squash_pool(path: &Path) -> SqlitePool {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    PRE_SQUASH_MIGRATOR.run(&pool).await.unwrap();
+    pool
+}
+
+#[tokio::test]
+async fn squashed_schema_matches_the_pre_squash_migration_chain() {
+    let old_pool = open_pre_squash_pool(Path::new(":memory:")).await;
+    let squashed_pool = connect_in_memory().await.unwrap();
+
+    assert_eq!(
+        schema_snapshot(&old_pool).await,
+        schema_snapshot(&squashed_pool).await
+    );
+}
+
+#[tokio::test]
+async fn connect_rejects_pre_squash_migration_history_without_applying_migrations() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pre-squash.db");
+    let pool = open_pre_squash_pool(&path).await;
+    sqlx::query("CREATE TABLE preserved_data (value TEXT NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO preserved_data (value) VALUES ('keep me')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let error = connect(&path).await.unwrap_err();
+    assert!(matches!(
+        &error,
+        DbError::IncompatibleMigrationHistory(error_path) if error_path == &path
+    ));
+    assert!(error.to_string().contains(&path.display().to_string()));
+    assert!(error.to_string().contains("back it up"));
+    assert!(error.to_string().contains("new database file"));
+
+    let read_only = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(&path).read_only(true))
+        .await
+        .unwrap();
+    let versions: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&read_only)
+            .await
+            .unwrap();
+    assert_eq!(versions, vec![1, 2, 3, 4]);
+    let value: String = sqlx::query_scalar("SELECT value FROM preserved_data")
+        .fetch_one(&read_only)
+        .await
+        .unwrap();
+    assert_eq!(value, "keep me");
+    read_only.close().await;
+}
+
+#[tokio::test]
+async fn connect_read_only_rejects_pre_squash_migration_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pre-squash.db");
+    let pool = open_pre_squash_pool(&path).await;
+    pool.close().await;
+
+    let error = connect_read_only(&path).await.unwrap_err();
+    assert!(matches!(
+        &error,
+        DbError::IncompatibleMigrationHistory(error_path) if error_path == &path
+    ));
+    assert!(error.to_string().contains(&path.display().to_string()));
+    assert!(error.to_string().contains("back it up"));
+    assert!(error.to_string().contains("new database file"));
+}
+
+#[tokio::test]
+async fn connect_rejects_a_dirty_pre_squash_migration_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dirty-pre-squash.db");
+    let pool = open_pre_squash_pool(&path).await;
+    sqlx::query("UPDATE _sqlx_migrations SET success = 0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let error = connect(&path).await.unwrap_err();
+    assert!(matches!(
+        error,
+        DbError::IncompatibleMigrationHistory(error_path) if error_path == path
+    ));
+}
+
+#[tokio::test]
+async fn restore_rejects_a_pre_squash_backup_before_replacing_the_live_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy_path = dir.path().join("legacy.db");
+    let legacy_pool = open_pre_squash_pool(&legacy_path).await;
+    let backup_path = dir.path().join("pre-squash-backup.db");
+    backup_to(&legacy_pool, &backup_path).await.unwrap();
+    legacy_pool.close().await;
+
+    let live_path = dir.path().join("live.db");
+    let live_pool = connect(&live_path).await.unwrap();
+    sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)")
+        .bind("restore-marker")
+        .bind("\"keep me\"")
+        .bind(Utc::now().to_rfc3339())
+        .execute(&live_pool)
+        .await
+        .unwrap();
+    let verification_pool = live_pool.clone();
+
+    let error = restore_from(live_pool, &live_path, &backup_path, Utc::now())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        &error,
+        DbError::IncompatibleMigrationHistory(error_path) if error_path == &backup_path
+    ));
+    assert!(error.to_string().contains("new database file"));
+
+    let value: String = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind("restore-marker")
+        .fetch_one(&verification_pool)
+        .await
+        .unwrap();
+    assert_eq!(value, "\"keep me\"");
+    assert!(backup_path.exists());
+    verification_pool.close().await;
+}
 
 #[tokio::test]
 async fn dcs_template_round_trips_every_built_in_template() {
