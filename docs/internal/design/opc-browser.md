@@ -5,7 +5,7 @@ the [design notes index](README.md) for provenance.
 
 ## Scalable OPC browse/search integration
 
-The BHTune OPC integration targets the published `opcda-bridge` 0.5 Rust API. The old flat, globally
+The BHTune OPC integration targets the published `opcda-bridge` 0.6 Rust API. The old flat, globally
 limited namespace model is not supported: `bhtune-driver` uses typed capabilities, bounded browse
 pages, opaque browse sessions/node keys/page tokens, exact ItemIDs, branch/item/branch-and-item
 node kinds, explicit session cleanup, and gateway-owned persistent indexed search. The HTTP API

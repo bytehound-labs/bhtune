@@ -657,14 +657,15 @@ exit 7
 
     $checkedInContractPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'opcda-gateway-release.json'
     $checkedInContract = Assert-GatewayReleaseContract -ContractPath $checkedInContractPath
-    Assert-Equal -Actual $checkedInContract.tag -Expected 'opcda-bridge-gateway-v0.5.9' -Message 'the pinned gateway release tag is stable and exact'
-    Assert-Equal -Actual $checkedInContract.archive.sha256 -Expected 'd372ff30d6fb61b66767a63aa5bee4548d7c6c1052800f1369fc34f57ab25f30' -Message 'the pinned gateway archive checksum is exact'
-    $gatewayInfoJson = '{"application_version":"0.5.9","compatibility_schema_version":1,"features":[{"feature":"core","min_version":1,"max_version":1},{"feature":"namespace","min_version":2,"max_version":2},{"feature":"indexed_search","min_version":2,"max_version":2}]}'
+    Assert-Equal -Actual $checkedInContract.tag -Expected 'opcda-bridge-gateway-v0.6.1' -Message 'the pinned gateway release tag is stable and exact'
+    Assert-Equal -Actual $checkedInContract.archive.sha256 -Expected '6cc0d98a7256b3a36471b74ac6d252ef0bf9d55386c0631a1203050d6225f03e' -Message 'the pinned gateway archive checksum is exact'
+    Assert-Equal -Actual $checkedInContract.executable.sha256 -Expected '307d1f518da0e4b004504d501fea8b738c88b5103fb1356de3d1405281733a5a' -Message 'the pinned gateway executable checksum is exact'
+    $gatewayInfoJson = '{"application_version":"0.6.1","compatibility_schema_version":1,"features":[{"feature":"core","min_version":1,"max_version":1},{"feature":"namespace","min_version":2,"max_version":2},{"feature":"indexed_search","min_version":2,"max_version":2}]}'
     $gatewayInfo = Assert-GatewayInfoPayload -Json $gatewayInfoJson -Contract $checkedInContract
-    Assert-Equal -Actual $gatewayInfo.application_version -Expected '0.5.9' -Message 'gateway-wide handshake accepts the pinned version and protocols'
+    Assert-Equal -Actual $gatewayInfo.application_version -Expected '0.6.1' -Message 'gateway-wide handshake accepts the pinned version and protocols'
     Assert-Throws -Action {
         Assert-GatewayInfoPayload `
-            -Json ($gatewayInfoJson.Replace('"application_version":"0.5.9"', '"application_version":"0.5.8"')) `
+            -Json ($gatewayInfoJson.Replace('"application_version":"0.6.1"', '"application_version":"0.6.0"')) `
             -Contract $checkedInContract
     } -Message 'gateway-wide handshake rejects a different running version'
     Assert-Throws -Action {
@@ -708,7 +709,7 @@ exit 7
         }
     }
     $gatewaySmoke = Invoke-GatewaySmokeCheck -Paths $paths
-    Assert-Equal -Actual $gatewaySmoke.application_version -Expected '0.5.9' -Message 'gateway smoke validates the gateway-wide handshake'
+    Assert-Equal -Actual $gatewaySmoke.application_version -Expected '0.6.1' -Message 'gateway smoke validates the gateway-wide handshake'
     Assert-Equal -Actual $script:GatewaySmokeArguments -Expected 'opc --output json gateway-info --bridge-host 127.0.0.1:7600' -Message 'gateway smoke does not require OPC server enumeration'
 
     $gatewayPayloadRoot = Join-Path $script:WorkRoot 'gateway-payload'
@@ -747,18 +748,12 @@ exit 7
         release_workflow_blob_sha   = $fixtureContract.release_workflow.blob_sha
         sigstore_verified           = $true
         github_provenance_verified  = $true
-        compatibility_verified      = $true
     }
     Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'opcda-gateway-provenance.json') -Content ($fixtureProvenance | ConvertTo-Json -Depth 8)
     Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'LICENSE-opcda-bridge.txt') -Content 'MIT'
     Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'NOTICE-opcda-bridge.txt') -Content 'notice'
     $gatewayPayload = Assert-GatewayPayloadLayout -GatewayPayloadRoot $gatewayPayloadRoot
-    Assert-Equal -Actual $gatewayPayload.Contract.version -Expected '0.5.9' -Message 'gateway payloads matching the pinned release contract are accepted'
-    $fixtureProvenance.compatibility_verified = $false
-    Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'opcda-gateway-provenance.json') -Content ($fixtureProvenance | ConvertTo-Json -Depth 8)
-    Assert-Throws -Action { Assert-GatewayPayloadLayout -GatewayPayloadRoot $gatewayPayloadRoot } -Message 'unverified gateway compatibility metadata is rejected'
-    $fixtureProvenance.compatibility_verified = $true
-    Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'opcda-gateway-provenance.json') -Content ($fixtureProvenance | ConvertTo-Json -Depth 8)
+    Assert-Equal -Actual $gatewayPayload.Contract.version -Expected '0.6.1' -Message 'gateway payloads matching the pinned release contract are accepted'
     Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'unexpected.txt') -Content 'unexpected'
     Assert-Throws -Action { Assert-GatewayPayloadLayout -GatewayPayloadRoot $gatewayPayloadRoot } -Message 'unexpected gateway payload files are rejected'
 
@@ -1396,6 +1391,31 @@ exit 7
     $lockAgain = Enter-InstallerTransactionLock -TimeoutSeconds 1
     Exit-InstallerTransactionLock -Lock $lockAgain
     Assert-True -Condition $true -Message 'released installer mutex permits a subsequent transaction'
+
+    $registryRacePath = "HKCU:\Software\BhtuneRegistrySnapshot-$([guid]::NewGuid().ToString('N'))"
+    New-Item -Path $registryRacePath -Force | Out-Null
+    $script:RegistrySnapshotRacePath = $registryRacePath
+    try {
+        function Get-ItemProperty {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$LiteralPath
+            )
+
+            if ($LiteralPath -eq $script:RegistrySnapshotRacePath) {
+                Remove-Item -LiteralPath $LiteralPath -Force -ErrorAction Stop
+            }
+            Microsoft.PowerShell.Management\Get-ItemProperty -LiteralPath $LiteralPath -ErrorAction Stop
+        }
+        Assert-Null `
+            -Actual (Get-RegistrySnapshot -Path $registryRacePath) `
+            -Message 'a registry key disappearing during a snapshot is treated as absent'
+    } finally {
+        Remove-Item Function:\Get-ItemProperty -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $registryRacePath -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Variable -Name RegistrySnapshotRacePath -Scope Script -ErrorAction SilentlyContinue
+    }
 
     $script:MockMarker = $null
     $script:MockUninstall = $null

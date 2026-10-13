@@ -154,7 +154,7 @@ libc = "0.2"
 # generated types agree with `opcda_bridge::Client`. Versionless path only: Cargo strips
 # a versionless dev-dependency when packaging, so this unpublished crate is never
 # resolved from crates.io. Do not add a version.
-opcda-bridge-proto = "0.5"
+opcda-bridge-proto = "0.6"
 tonic.workspace = true
 bhtune-test-support = { path = "../bhtune-test-support", features = [
   "mock-driver",

@@ -90,7 +90,7 @@ sqlx = { version = "0.9", default-features = false, features = [
 # itself comes from `bhtune-test-support`, pinned to the same proto/tonic versions.
 # Versionless path only: Cargo strips a versionless dev-dependency when packaging, so
 # this unpublished crate is never resolved from crates.io. Do not add a version.
-opcda-bridge-proto = "0.5"
+opcda-bridge-proto = "0.6"
 bhtune-test-support = { path = "../bhtune-test-support", features = [
   "mock-driver",
 ] }
