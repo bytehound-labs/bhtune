@@ -270,17 +270,13 @@ function Assert-GatewayReleaseContract {
     }
     if ([string]$contract.upstream_evidence.checksums -cne 'release-assets.sha256' -or
         [string]$contract.upstream_evidence.archive_sigstore_bundle -cne 'opcda-bridge-gateway-windows-x86.zip.sigstore.json' -or
-        [string]$contract.upstream_evidence.provenance -cne 'attestation.json' -or
-        [string]$contract.upstream_evidence.compatibility -cne 'compatibility.json') {
+        [string]$contract.upstream_evidence.provenance -cne 'attestation.json') {
         throw 'The OPC DA gateway release contract has unexpected upstream evidence names.'
     }
-    if ([string]$contract.compatibility.release_line -cne 'indexed-on-demand' -or
-        [string]$contract.compatibility.min_version -cne '0.5.0' -or
-        [string]$contract.compatibility.max_version -cne '0.999.999' -or
-        [int]$contract.compatibility.core_protocol -ne 1 -or
+    if ([int]$contract.compatibility.core_protocol -ne 1 -or
         [int]$contract.compatibility.namespace_protocol -ne 2 -or
         [int]$contract.compatibility.indexed_search_protocol -ne 2) {
-        throw 'The OPC DA gateway release contract does not describe the supported indexed-on-demand protocol line.'
+        throw 'The OPC DA gateway release contract does not describe the required protocol versions.'
     }
 
     return $contract
@@ -343,8 +339,7 @@ function Assert-GatewayPayloadLayout {
         [string]$provenance.builder_id -cne [string]$contract.release_workflow.builder_id -or
         [string]$provenance.release_workflow_blob_sha -cne [string]$contract.release_workflow.blob_sha -or
         $provenance.sigstore_verified -isnot [bool] -or -not $provenance.sigstore_verified -or
-        $provenance.github_provenance_verified -isnot [bool] -or -not $provenance.github_provenance_verified -or
-        $provenance.compatibility_verified -isnot [bool] -or -not $provenance.compatibility_verified) {
+        $provenance.github_provenance_verified -isnot [bool] -or -not $provenance.github_provenance_verified) {
         throw 'The staged OPC DA gateway provenance manifest does not match the pinned release contract.'
     }
 

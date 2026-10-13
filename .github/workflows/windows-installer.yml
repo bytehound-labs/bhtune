@@ -192,8 +192,7 @@ jobs:
             [string]$contract.upstream_evidence.archive_sigstore_bundle,
             [string]$contract.upstream_evidence.checksums,
             "$($contract.upstream_evidence.checksums).sigstore.json",
-            [string]$contract.upstream_evidence.provenance,
-            [string]$contract.upstream_evidence.compatibility
+            [string]$contract.upstream_evidence.provenance
           )
           $publishedAssets = @($release.assets | ForEach-Object { [string]$_.name })
           foreach ($asset in $requiredAssets) {
@@ -240,7 +239,6 @@ jobs:
           $checksums = Join-Path $download ([string]$contract.upstream_evidence.checksums)
           $checksumsBundle = "$checksums.sigstore.json"
           $attestation = Join-Path $download ([string]$contract.upstream_evidence.provenance)
-          $compatibility = Join-Path $download ([string]$contract.upstream_evidence.compatibility)
 
           cosign verify-blob `
             --bundle $checksumsBundle `
@@ -299,21 +297,6 @@ jobs:
             throw "The extracted upstream gateway executable does not match the pinned SHA-256."
           }
 
-          $compatibilityRecord = Get-Content -LiteralPath $compatibility -Raw | ConvertFrom-Json
-          $releaseLine = @(
-            $compatibilityRecord.release_lines |
-              Where-Object { [string]$_.name -ceq [string]$contract.compatibility.release_line }
-          )
-          if ($releaseLine.Count -ne 1 -or
-              [string]$releaseLine[0].status -cne 'supported' -or
-              [string]$releaseLine[0].min_version -cne [string]$contract.compatibility.min_version -or
-              [string]$releaseLine[0].max_version -cne [string]$contract.compatibility.max_version -or
-              [int]$releaseLine[0].core_protocol -ne [int]$contract.compatibility.core_protocol -or
-              [int]$releaseLine[0].namespace_protocol -ne [int]$contract.compatibility.namespace_protocol -or
-              [int]$releaseLine[0].indexed_search_protocol -ne [int]$contract.compatibility.indexed_search_protocol) {
-            throw "The upstream gateway compatibility catalog does not contain the pinned supported release line."
-          }
-
           Copy-Item -LiteralPath $executable -Destination (Join-Path $payload 'opcda-bridge-gateway.exe')
           Copy-Item -LiteralPath $contractSource -Destination (Join-Path $payload 'opcda-gateway-release.json')
           Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\third-party\opcda-bridge\LICENSE-MIT.txt') -Destination (Join-Path $payload 'LICENSE-opcda-bridge.txt')
@@ -333,11 +316,8 @@ jobs:
             release_assets_sha256_sha256   = (Get-FileHash -Algorithm SHA256 -LiteralPath $checksums).Hash.ToLowerInvariant()
             archive_sigstore_bundle_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archiveBundle).Hash.ToLowerInvariant()
             provenance_asset_sha256        = (Get-FileHash -Algorithm SHA256 -LiteralPath $attestation).Hash.ToLowerInvariant()
-            compatibility_asset_sha256     = (Get-FileHash -Algorithm SHA256 -LiteralPath $compatibility).Hash.ToLowerInvariant()
             sigstore_verified              = $true
             github_provenance_verified     = $true
-            compatibility_verified         = $true
-            compatibility                  = $releaseLine[0]
           }
           $provenance | ConvertTo-Json -Depth 12 |
             Set-Content -LiteralPath (Join-Path $payload 'opcda-gateway-provenance.json') -Encoding UTF8

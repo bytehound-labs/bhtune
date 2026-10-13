@@ -10,11 +10,11 @@ the [design notes index](README.md) for provenance.
 `opcda-bridge-gateway` as a companion component. The gateway is not built from source in this
 repository: `installer/windows/opcda-gateway-release.json` pins the exact stable upstream tag,
 source commit, archive/executable SHA-256 values, `i686-pc-windows-msvc`/`I386` architecture,
-release-workflow blob, and supported protocol line. `.github/workflows/windows-installer.yml`
+release-workflow blob, and required protocol versions. `.github/workflows/windows-installer.yml`
 independently verifies the upstream checksum and Sigstore evidence, GitHub provenance, archive
-layout, PE architecture, version, and compatibility metadata before embedding the executable,
-MIT license, notice, release contract, and generated verification manifest. The installer never
-downloads a gateway at runtime.
+layout, PE architecture, version, and gateway-wide protocol handshake before embedding the
+executable, MIT license, notice, release contract, and generated verification manifest. The
+installer never downloads a gateway at runtime.
 
 **Component defaults distinguish interactive and unattended installs.** A clean interactive
 install selects and starts the gateway after displaying that it is unauthenticated, runs as

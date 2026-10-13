@@ -47,8 +47,6 @@ impl Driver for ReadOnlyDriver {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use chrono::Utc;
-
     use super::*;
     use crate::{
         BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource, DriverCapabilities,
@@ -68,7 +66,7 @@ mod tests {
                     tag: tag.clone(),
                     value: "1".to_string(),
                     quality: Quality::Good,
-                    timestamp: Some(Utc::now()),
+                    timestamp: None,
                 })
                 .collect())
         }

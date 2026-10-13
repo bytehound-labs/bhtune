@@ -13,7 +13,7 @@ bhtune_cli = { package = "bhtune", path = "../crates/bhtune-cli" }
 bhtune-core = { path = "../crates/bhtune-core" }
 bhtune-driver = { path = "../crates/bhtune-driver" }
 bhtune-runtime = { path = "../crates/bhtune-runtime" }
-opcda-bridge = "0.5"
+opcda-bridge = "0.6"
 
 [[bin]]
 name = "config"

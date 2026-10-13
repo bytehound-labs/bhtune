@@ -97,7 +97,7 @@ gh workflow run windows-installer.yml \
 
 The workflow must verify the pinned gateway tag and source commit, release-workflow blob,
 upstream checksum and Sigstore evidence, GitHub provenance, exact archive contents, executable
-SHA-256 and 32-bit PE architecture, version, and compatibility metadata. The SYSTEM lifecycle
+SHA-256 and 32-bit PE architecture, version, and required protocol handshake. The SYSTEM lifecycle
 diagnostic runs a separately compiled test-only installer on the disposable hosted Windows
 runner. That build uses a unique workspace-owned install and ProgramData root, service names, and
 ownership registry key; it is never uploaded. The scheduled lifecycle task must prove the
@@ -117,11 +117,11 @@ Updating the bundled gateway is a reviewed source change, not a release-time loo
 
 1. Select an already-published stable `bytehound-labs/opcda-bridge` gateway release.
 2. Update the tag, source commit, archive/executable hashes, target, release-workflow blob, and
-   compatibility contract in `installer/windows/opcda-gateway-release.json`.
+   required protocol versions in `installer/windows/opcda-gateway-release.json`.
 3. Update `installer/windows/third-party/opcda-bridge/NOTICE.txt` to identify the same release
    and source commit. Keep the exact upstream MIT license unchanged unless upstream changes it.
 4. Run the installer contract suite and the Windows installer dry-run workflow. Never weaken a
-   checksum, workflow-identity, architecture, provenance, or compatibility assertion to accept
+   checksum, workflow-identity, architecture, provenance, or protocol assertion to accept
    a mismatched release.
 5. Complete controlled read-only OPC acceptance before making the installer a stable release
    asset. Do not write tags or start a namespace index as part of release acceptance.

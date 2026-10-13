@@ -328,18 +328,17 @@ if ($actualGatewayHash -ne ([string]$contract.executable.sha256).ToLowerInvarian
   throw "installed gateway checksum mismatch"
 }
 if (-not $provenance.sigstore_verified -or
-    -not $provenance.github_provenance_verified -or
-    -not $provenance.compatibility_verified) {
+    -not $provenance.github_provenance_verified) {
   throw "embedded gateway verification record is incomplete"
 }
 ```
 
 The checked-in release contract pins the upstream repository, stable tag, source commit,
-archive and executable hashes, 32-bit target, release-workflow blob, and supported protocol
-line. The installer workflow independently verifies the upstream checksum, Sigstore bundle,
-GitHub provenance, archive layout, PE architecture, version, and compatibility metadata before
-embedding the gateway. Treat any mismatch between the installed files, checked-in contract, or
-upstream evidence as a release failure.
+archive and executable hashes, 32-bit target, release-workflow blob, and required protocol
+versions. The installer workflow independently verifies the upstream checksum, Sigstore bundle,
+GitHub provenance, archive layout, PE architecture, version, and gateway-wide protocol handshake
+before embedding the gateway. Treat any mismatch between the installed files, checked-in contract,
+or upstream evidence as a release failure.
 
 The installer keeps BHTune and gateway configuration, databases, indexes, logs, and rollback
 state under ProgramData and does not create firewall rules. It is not Authenticode-signed, so
