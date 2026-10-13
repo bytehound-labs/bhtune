@@ -114,10 +114,10 @@
         "docs/guides/web-ui/starting-a-tune.md",
         "docs/dcs-templates.md"
       ],
-      "sha256": "2bf58bc3c28c44af91d000165b263dabd51374bb703cec076211f9ca73161024",
+      "sha256": "912a30b57f475e9768acff0f697726e4aa0e108629ac53b8315cdbd3d690b5d2",
       "width": 1440,
       "height": 1611,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=2bf58bc3c28c"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=912a30b57f47"
     },
     {
       "id": "full-opc-tag-applied",
@@ -156,10 +156,10 @@
       "documentation": [
         "docs/guides/web-ui/starting-a-tune.md"
       ],
-      "sha256": "4435cd44c6427978fed6d2ea45be194d05dcb55b35af7dd16e64621b7fd3d127",
+      "sha256": "aea8f9d0324629d3222606570bba992a64b0e3b20f480a83c0efa06ca968250f",
       "width": 1440,
       "height": 1611,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=4435cd44c642"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=aea8f9d03246"
     },
     {
       "id": "full-history",
