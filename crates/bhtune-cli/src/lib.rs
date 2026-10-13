@@ -48,8 +48,6 @@ pub mod args;
 pub mod commands;
 pub mod output;
 pub use bhtune_runtime::{cancel, config, db, driver, gateway, logging, retention};
-#[cfg(test)]
-mod test_support;
 
 use std::process::ExitCode;
 

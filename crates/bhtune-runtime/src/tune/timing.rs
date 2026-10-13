@@ -1,8 +1,6 @@
 #![allow(rustdoc::broken_intra_doc_links)]
 
-use bhtune_core::{
-    Action, ControllerDirection, LoopConfig, PvRange, TuningMathCompat, measure_oscillation,
-};
+use bhtune_core::{Action, ControllerDirection, LoopConfig, PvRange, measure_oscillation};
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{TimingBasis, TimingMetrics, TuneRunRow};
 
@@ -36,7 +34,6 @@ pub(super) fn completed_oscillation_period_ms(
         direction,
         config,
         pv_range,
-        TuningMathCompat::default(),
     );
     Some(f64::from(oscillation.period_minutes) * 60_000.0)
 }

@@ -50,7 +50,7 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - Full-mode startup exports evidence before marking verified orphaned owned `running` tunes failed and setting explicit recovery eligibility; it never contacts the controller. Eligibility requires complete structured ownership, provenance, restore intent, and mutation evidence; legacy/incomplete rows fail closed. Demo startup bypasses live-owner recovery.
 - `bhtune restore-loop <run-id> --yes` is the explicit live recovery path. It uses the recorded connection and policy; supplied connection flags are cross-checks only. The command reports every restore step, and it never reports success if restoration or required audit persistence is incomplete.
 - If follow-up provenance persistence fails, `prepare()` marks the owned row failed, or deletes it if that update cannot be stored. Do not leave a permanent `Running` row.
-- Production persistence uses `calculate_all_checked`. Invalid results store null numbers and cannot be written. Do not enable `MrftCompat.replicate_lower_clamp_bug`, `TuningMathCompat.replicate_period_truncation_bug`, or `MrftCompat.replicate_extrema_reset_bug` on a production path.
+- Production persistence uses `calculate_all_checked`. Invalid results store null numbers and cannot be written. MRFT uses the fixed clamp, full elapsed-time period, and switch-sample result-extrema behavior listed below.
 - Each template explicitly defines `pid_rounding`: 0-7 decimal places or 1-7 significant digits, shared by P/I/D. Yokogawa defaults to one decimal; the other built-ins and new custom templates use three significant digits. The runtime's controller-target gate applies it after unit conversion and supplies canonical text to CLI/HTTP/UI and numeric values to new writes. Preserve exact disable sentinels and reject active terms rounded to zero before PID I/O. Raw calculations, exports, previous/readback values, rollback, revert, and recovery are unrounded. Run snapshots require explicit precision; never infer it from a vendor name.
 - Result extrema are separate from hysteresis extrema. Hysteresis still resets the legacy way, so switch timing does not change. Variant B is research-only.
 - Full mode is the default, binds `127.0.0.1` by default, and has no authentication in v1. Off-loopback bind is an explicit opt-in. Browser mutations use same-host Origin/Host checks unless an explicit origin is pinned. That check is not authentication.
@@ -208,10 +208,10 @@ Tier 1 is generated: `docs/reference/**`, OpenAPI, man pages, and completions. C
 
 ## Correctness-critical design details
 
-Condensed register. Item numbers and decision tags match [`docs/internal/design/correctness-register.md`](docs/internal/design/correctness-register.md). Do not enable a compat flag on a production path.
+Condensed register. Item numbers and decision tags match [`docs/internal/design/correctness-register.md`](docs/internal/design/correctness-register.md).
 
-1. **`[fixed, compat flag available]`** The MV lower clamp is the distance from the initial MV down to the floor, not an expression that adds the floor back onto the initial value. Compat: `MrftCompat.replicate_lower_clamp_bug`.
-2. **`[fixed, compat flag available]`** Oscillation period uses full-precision elapsed milliseconds on the default path. It does not truncate to whole seconds or wrap at 24 hours. Compat: `TuningMathCompat.replicate_period_truncation_bug`. Whole-second tests do not prove this.
+1. **`[fixed, no flag needed]`** The MV lower clamp is the distance from the initial MV down to the floor, not an expression that adds the floor back onto the initial value.
+2. **`[fixed, no flag needed]`** Oscillation period uses full-precision elapsed milliseconds. It does not truncate to whole seconds or wrap at 24 hours. Whole-second tests do not prove this.
 3. **`[structurally impossible]`** A switch reuses the tick timestamp. `bhtune-core` cannot call `Utc::now()`.
 4. **`[structurally impossible]`** Process-type lookup tables have length 6, matching `ProcessType::ALL`.
 5. **`[preserved rule]`** A tabular export header and its rows come from one ordered field list.
@@ -230,7 +230,7 @@ Condensed register. Item numbers and decision tags match [`docs/internal/design/
 18. **`[not applicable — feature dropped]`** There is no log encryption and no login gate.
 19. **`[fixed, no flag needed]`** An accepted MV write is not physical actuation. Confirmation, exit precedence, and latency overlap are in the live-plant section.
 20. **`[fixed, no flag needed]`** A base-tag change resets Custom tag mappings and custom direction or range read mappings. Fixed-value direction and range mappings stay. Omitted direction or range values hydrate as template-tag sources, not fixed values.
-21. **`[fixed, compat flag available]`** Result extrema include the switch sample and are not reset to `pv_value_ini`. Hysteresis extrema still use the legacy reset, so switching is unchanged. Compat: `MrftCompat.replicate_extrema_reset_bug`. Variant B, which would also seed hysteresis from the switch sample, is `[research-only]`. It needs closed-loop simulation and an explicitly approved noncritical trial. No such trial is part of the current implementation.
+21. **`[fixed, no flag needed]`** Result extrema include the switch sample and are not reset to `pv_value_ini`. Hysteresis extrema still use the legacy reset, so switching is unchanged. Variant B, which would also seed hysteresis from the switch sample, is `[research-only]`. It needs closed-loop simulation and an explicitly approved noncritical trial. No such trial is part of the current implementation.
 22. **`[fixed, no flag needed]`** A zero, negative, or non-finite amplitude, period, or converted P/I/D value is an invalid result with a reason and null numbers. Write paths reject it before connecting to a driver.
 23. **`[advisory diagnostic]`** Sampling adequacy is `adequate` at 6.0 or more samples per measured period, `marginal` below that, and `not_assessed` without a usable period. Latency summaries are advisory and do not change validity or write permission.
 24. **`[fixed, no flag needed]`** Saved OPC tag restoration keeps the tree mounted but covered until the selected row is visible. Errors, missing tags, cancellation, and fallback selection must clear that overlay. Reuse the shared loading primitives.

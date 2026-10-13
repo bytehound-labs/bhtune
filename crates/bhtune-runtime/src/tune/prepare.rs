@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use bhtune_core::{
     Action, ControllerDirection, ControllerType, DcsTemplate, InitialReadings, LoopConfig,
-    LoopTags, MrftCompat, MrftEngine, MvRange, ProcessType, PvRange, ResponseLevel, TagOrValue,
-    TagOverrides, lookup,
+    LoopTags, MrftEngine, MvRange, ProcessType, PvRange, ResponseLevel, TagOrValue, TagOverrides,
+    lookup,
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
@@ -701,7 +701,6 @@ pub(super) async fn execute_with_timing(
             mv_range_high: initial.mv_range_high,
         },
         started_at,
-        MrftCompat::default(),
     );
     let timing_basis = match args.driver {
         DriverKind::Opcda => TimingBasis::LiveMonotonic,

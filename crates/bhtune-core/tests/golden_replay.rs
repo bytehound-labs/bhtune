@@ -16,9 +16,8 @@
 use std::{fs, path::Path};
 
 use bhtune_core::{
-    Action, ControllerDirection, ControllerType, InitialReadings, LoopConfig, MrftCompat,
-    MrftEngine, ProcessType, PvRange, ResponseLevel, Tick, TuningMathCompat, built_in_templates,
-    calculate_all, lookup,
+    Action, ControllerDirection, ControllerType, InitialReadings, LoopConfig, MrftEngine,
+    ProcessType, PvRange, ResponseLevel, Tick, built_in_templates, calculate_all, lookup,
 };
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -188,14 +187,7 @@ fn flow_pi_direct_replays_exactly() {
     );
     let start_time = fixture.ticks[0].time;
 
-    let mut engine = MrftEngine::new(
-        config,
-        direction,
-        beta,
-        initial,
-        start_time,
-        MrftCompat::default(),
-    );
+    let mut engine = MrftEngine::new(config, direction, beta, initial, start_time);
 
     // `MrftEngine`'s `Action::Complete` payload, captured verbatim for the `calculate_all` call below.
     type CompletionPayload = (Vec<f32>, Vec<f32>, Vec<DateTime<Utc>>, i8);
@@ -313,7 +305,6 @@ fn flow_pi_direct_replays_exactly() {
         config,
         pv_range,
         &template,
-        TuningMathCompat::default(),
     );
 
     for expected in &fixture.expected_final.results {
@@ -330,9 +321,8 @@ fn flow_pi_direct_replays_exactly() {
         assert_approx(&format!("{label} kp"), tuning.kp, expected.kp);
         // ti_minutes (and integral, its DCS-unit-converted sibling) get a wider, dedicated
         // tolerance: the recorded value was computed by the legacy app's period formula,
-        // which truncates to whole seconds via `TimeSpan.Seconds` (the exact bug
-        // `TuningMathCompat::replicate_period_truncation_bug` documents), applied to
-        // sub-second-precise internal timestamps this trace's CSV log cannot represent (it
+        // which truncates to whole seconds via `TimeSpan.Seconds`, applied to sub-second-
+        // precise internal timestamps this trace's CSV log cannot represent (it
         // only records whole-second `TimeCurrent`/`MvSwitchTimesList` strings -- the same
         // precision ceiling already worked around once above, for tick 3's noise-protection
         // boundary). Reconstructing switch_times from those whole-second strings makes the
@@ -341,8 +331,8 @@ fn flow_pi_direct_replays_exactly() {
         // here (verified numerically: 12s vs 13s elapsed over `num_cycles_count=2` cycles
         // bounds the error at `c2 * (1.0/60.0/2.0)` minutes for ti_minutes, ~0.00276 for this
         // config -- comfortably inside PERIOD_TOLERANCE_MINUTES below). This is a property of
-        // this one whole-second-logged trace, not an engine defect: the default (bug-fixed)
-        // `TuningMathCompat` is deliberately used here, since it is the behavior bhtune ships.
+        // this one whole-second-logged trace, not an engine defect: current calculations use
+        // the full millisecond elapsed time available in the reconstructed trace.
         const PERIOD_TOLERANCE_MINUTES: f32 = 0.01;
         let ti_diff = (tuning.ti_minutes - expected.ti_minutes).abs();
         assert!(

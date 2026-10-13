@@ -44,17 +44,16 @@ tolerances to make a test pass):
   changing the engine, since the engine's own `<=` comparison was verified byte-for-byte identical
   to `OPCClass.cs`'s.
 - **`CalculatedMRFTperiodMinutes` (`OPCClass.cs`, ~line 743) computes elapsed time via
-  `TimeSpan.Seconds` — an integer, truncating — rather than total elapsed seconds**: exactly the
-  bug `TuningMathCompat::replicate_period_truncation_bug` already exists to optionally reproduce
-  (see "Correctness-critical design details" below, item 2). Combined with the whole-second
-  logging ceiling above, the fixture's reconstructed elapsed time between the first and last
-  recorded switch can differ from the legacy app's own truncated-integer computation by up to one
-  second — fully and numerically explaining the one place the replay harness needs a dedicated,
-  narrow tolerance (`ti_minutes`/`integral`, ~0.003 minutes observed against a documented ~0.0028
-  theoretical bound for this trace's cycle count) rather than the general tolerance used
-  everywhere else. This is a property of this one whole-second-logged trace, not the engine: the
-  harness deliberately drives `calculate_all` with the _default_ (bug-fixed) `TuningMathCompat`,
-  since that is the behavior bhtune ships.
+  `TimeSpan.Seconds` — an integer, truncating — rather than total elapsed seconds**. The Rust
+  engine uses full elapsed milliseconds, without truncation or a 24-hour wrap (see
+  "Correctness-critical design details" below, item 2). Combined with the whole-second logging
+  ceiling above, the fixture's reconstructed elapsed time between the first and last recorded
+  switch can differ from the legacy app's truncated calculation by up to one second — fully and
+  numerically explaining the one place the replay harness needs a dedicated, narrow tolerance
+  (`ti_minutes`/`integral`, ~0.003 minutes observed against a documented ~0.0028 theoretical
+  bound for this trace's cycle count) rather than the general tolerance used everywhere else.
+  This is a property of this one whole-second-logged trace, not the engine: the harness uses the
+  production `calculate_all` behavior.
 
 Reference traces are captured two ways, neither of which requires Windows:
 

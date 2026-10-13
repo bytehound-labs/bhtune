@@ -119,8 +119,8 @@ mod tests {
 
     use bhtune_core::{
         Action, ControllerDirection, DcsTemplate, InitialReadings, LoopConfig, LoopTags,
-        MrftCompat, MrftEngine, MrftState, ProcessType, PvRange, ResponseLevel, TagOrValue,
-        TagOverrides, Tick, TuningResultStatus, lookup,
+        MrftEngine, MrftState, ProcessType, PvRange, ResponseLevel, TagOrValue, TagOverrides, Tick,
+        TuningResultStatus, lookup,
     };
     use bhtune_db::SqlitePool;
     use bhtune_db::models::{
@@ -1886,7 +1886,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
         let (mut ctrl_c, tx) = CtrlC::test_pair();
         tokio::spawn(async move {
@@ -2170,7 +2169,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
 
         let mut timing = timing_for_args(&args);
@@ -2274,7 +2272,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
 
         let mut timing = timing_for_args(&args);
@@ -2361,7 +2358,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
 
         let mut timing = timing_for_args(&args);
@@ -2455,7 +2451,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
 
         let (mut ctrl_c, tx) = CtrlC::test_pair();
@@ -3924,7 +3919,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             Utc::now(),
-            MrftCompat::default(),
         );
         let (mut ctrl_c, tx) = CtrlC::test_pair();
         tokio::spawn(async move {
@@ -4025,7 +4019,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
         let mut timing = timing_for_args(&args);
 
@@ -4124,7 +4117,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
         let mut timing = timing_for_args(&args);
 
@@ -4224,7 +4216,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
         let mut timing = timing_for_args(&args);
 
@@ -4317,7 +4308,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
         let mut timing = timing_for_args(&args);
 
@@ -4394,7 +4384,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
         let state_before = engine.state();
         let mut timing = timing_for_args(&args);
@@ -4476,7 +4465,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
         let state_before = engine.state();
         let mut timing = timing_for_args(&args);
@@ -4569,7 +4557,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
         let state_before = engine.state();
         let mut timing = timing_for_args(&args);
@@ -6054,7 +6041,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             time_anchor.utc(),
-            MrftCompat::default(),
         );
         TuneSampleRow::insert(
             &pool,
@@ -8681,7 +8667,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
         let (mut ctrl_c, tx) = CtrlC::test_pair();
         tokio::spawn(async move {
@@ -8760,7 +8745,6 @@ mod tests {
                 mv_range_high: initial.mv_range_high,
             },
             started_at,
-            MrftCompat::default(),
         );
 
         let mut timing = timing_for_args(&args);

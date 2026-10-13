@@ -640,9 +640,8 @@ mod tests {
         use std::{fs, path::Path};
 
         use bhtune_core::{
-            Action, ControllerDirection, ControllerType, InitialReadings, LoopConfig, MrftCompat,
-            MrftEngine, ProcessType, PvRange, ResponseLevel, Tick, TuningMathCompat,
-            built_in_templates, calculate_all, lookup,
+            Action, ControllerDirection, ControllerType, InitialReadings, LoopConfig, MrftEngine,
+            ProcessType, PvRange, ResponseLevel, Tick, built_in_templates, calculate_all, lookup,
         };
 
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -711,14 +710,7 @@ mod tests {
             pv: first[0].value.parse().unwrap(),
         });
 
-        let mut engine = MrftEngine::new(
-            config,
-            direction,
-            beta,
-            initial,
-            start_time,
-            MrftCompat::default(),
-        );
+        let mut engine = MrftEngine::new(config, direction, beta, initial, start_time);
 
         let mut completion = None;
         for _ in 0..total_samples {
@@ -768,15 +760,12 @@ mod tests {
             config,
             pv_range,
             &template,
-            TuningMathCompat::default(),
         );
 
         // The aggressive-response proportional band, in the fixture's own DCS units,
         // matches the independently checked control-theory calculation for this capture.
-        // Same tolerance shape `golden_replay.rs` uses for its own final numbers -- see that
-        // test for the full rationale (float rounding, and the period-truncation-bug-driven
-        // `ti_minutes`/`integral` slack in particular, which is why this test doesn't also
-        // re-check those two fields as tightly).
+        // Same tolerance shape `golden_replay.rs` uses for its own final numbers; see that
+        // test for the rationale around the captured fixture's floating-point values.
         let expected_aggressive_pb = 157.7088_f32;
         let (_tuning, pid) = results
             .iter()

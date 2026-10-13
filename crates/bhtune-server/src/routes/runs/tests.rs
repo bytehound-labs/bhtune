@@ -3,12 +3,17 @@ use super::super::helpers::{
     reserve_connect_and_write_with_hooks,
 };
 use super::*;
+use crate::test_support::good_reading;
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use bhtune_cli::args::{Cli as CliArgs, Command as CliCommand};
 use bhtune_core::{ControllerType, LoopConfig, ProcessType, ResponseLevel};
 use bhtune_db::models::{Pagination, TuneDriver, TuneOutcome, TuneRunFilter, TuneWriteRow};
+use bhtune_driver::{
+    OpcDaCompatibilitySource, OpcDaCompatibilityStatus, OpcDaGatewayCompatibility,
+};
 use bhtune_runtime::tune::ValidatedTuneRequest;
+use bhtune_test_support::{MockBridgeService, start_mock_server};
 use clap::Parser;
 use tokio::sync::oneshot;
 use tower::ServiceExt;
@@ -217,7 +222,6 @@ async fn preflight_surfaces_missing_server_as_bad_request_without_writes() {
 async fn opcda_preflight_does_not_write_to_the_mock_controller() {
     use std::sync::atomic::Ordering;
 
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
     use opcda_bridge_proto::bridge::ListServersResponse;
 
     let service = MockBridgeService {
@@ -228,7 +232,7 @@ async fn opcda_preflight_does_not_write_to_the_mock_controller() {
         ..Default::default()
     };
     let write_calls = std::sync::Arc::clone(&service.write_calls);
-    let (bridge_host, mock_server) = start_mock_server(service).await;
+    let (bridge_host, mock_server) = start_mock_server(service).await.expect("bind mock bridge");
     let state = crate::test_support::in_memory_state().await;
     let mut request = fast_simulator_request_json();
     request["driver"] = serde_json::json!("opcda");
@@ -806,20 +810,23 @@ async fn write_pid_without_yes_returns_400() {
 }
 
 #[test]
-fn legacy_http_timing_fields_are_ignored() {
-    let mut request = fast_simulator_request_json();
-    request["mrft_delay"] = serde_json::json!(123);
-    request["poll_interval_ms"] = serde_json::json!(1);
-    request["timeout_secs"] = serde_json::json!(1);
-    request["op_timeout_secs"] = serde_json::json!(1);
-    request["restore_timeout_secs"] = serde_json::json!(1);
-
-    let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
-    let args = parsed
-        .into_validated_tune_request()
-        .expect("legacy fields must not affect request parsing");
-    assert_eq!(args.as_request().template, "Yokogawa CentumVP");
-    assert_eq!(args.as_request().relay_amp, 10.0);
+fn obsolete_http_timing_fields_are_rejected() {
+    let request = fast_simulator_request_json();
+    for field in [
+        "mrft_delay",
+        "poll_interval_ms",
+        "timeout_secs",
+        "op_timeout_secs",
+        "restore_timeout_secs",
+    ] {
+        let mut request = request.clone();
+        request[field] = serde_json::json!(1);
+        let error = serde_json::from_value::<StartRunRequest>(request).unwrap_err();
+        assert!(
+            error.to_string().contains("unknown field"),
+            "expected {field} to be rejected, got: {error}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -986,7 +993,6 @@ async fn cancelling_an_active_run_aborts_it_and_returns_204() {
     let state = crate::test_support::in_memory_state().await;
 
     let mut slow_request = fast_simulator_request_json();
-    slow_request["poll_interval_ms"] = serde_json::json!(1000);
     slow_request["cycles_count"] = serde_json::json!(50);
 
     let start_response = post_json(
@@ -1192,8 +1198,6 @@ async fn post_empty(app: axum::Router, path: &str) -> axum::http::Response<Body>
 
 #[tokio::test]
 async fn write_run_succeeds_and_records_a_write_kind_row() {
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
-
     let (host, _host_server) = start_mock_server(MockBridgeService {
         read_response: good_reading("10.0"),
         write_response: opcda_bridge_proto::bridge::WriteResponse {
@@ -1203,7 +1207,8 @@ async fn write_run_succeeds_and_records_a_write_kind_row() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
 
     let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
@@ -1235,8 +1240,6 @@ async fn write_run_succeeds_and_records_a_write_kind_row() {
 /// A later write must not replace the snapshot recorded when the run started.
 #[tokio::test]
 async fn write_run_keeps_an_existing_gateway_compatibility_snapshot() {
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
-
     let (host, _host_server) = start_mock_server(MockBridgeService {
         read_response: good_reading("10.0"),
         write_response: opcda_bridge_proto::bridge::WriteResponse {
@@ -1246,12 +1249,20 @@ async fn write_run_keeps_an_existing_gateway_compatibility_snapshot() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
 
     let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
-    let existing = r#"{"status":"full","source":"prior"}"#;
-    TuneRunRow::record_gateway_compatibility(&state.pool, run_id, existing)
+    let existing = serde_json::to_string(&OpcDaGatewayCompatibility {
+        client_version: "0.1.0".to_owned(),
+        gateway_version: Some("0.5.0".to_owned()),
+        source: OpcDaCompatibilitySource::GatewayInfo,
+        status: OpcDaCompatibilityStatus::Full,
+        features: Vec::new(),
+    })
+    .unwrap();
+    TuneRunRow::record_gateway_compatibility(&state.pool, run_id, &existing)
         .await
         .unwrap();
 
@@ -1263,13 +1274,14 @@ async fn write_run_keeps_an_existing_gateway_compatibility_snapshot() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
-    assert_eq!(run.gateway_compatibility_json.as_deref(), Some(existing));
+    assert_eq!(
+        run.gateway_compatibility_json.as_deref(),
+        Some(existing.as_str())
+    );
 }
 
 #[tokio::test]
 async fn write_reports_an_internal_error_when_the_run_vanishes_after_the_write() {
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
-
     let (host, _host_server) = start_mock_server(MockBridgeService {
         read_response: good_reading("10.0"),
         write_response: opcda_bridge_proto::bridge::WriteResponse {
@@ -1279,7 +1291,8 @@ async fn write_reports_an_internal_error_when_the_run_vanishes_after_the_write()
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let state = crate::test_support::in_memory_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
     let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
@@ -1315,8 +1328,6 @@ async fn write_reports_an_internal_error_when_the_run_vanishes_after_the_write()
 
 #[tokio::test]
 async fn write_propagates_an_unexpected_database_failure_and_releases_its_reservation() {
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
-
     let (host, _host_server) = start_mock_server(MockBridgeService {
         read_response: good_reading("10.0"),
         write_response: opcda_bridge_proto::bridge::WriteResponse {
@@ -1326,7 +1337,8 @@ async fn write_propagates_an_unexpected_database_failure_and_releases_its_reserv
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let state = crate::test_support::in_memory_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
     let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
@@ -1365,8 +1377,6 @@ async fn write_propagates_an_unexpected_database_failure_and_releases_its_reserv
 
 #[tokio::test]
 async fn write_run_reports_a_failed_write_as_200_not_an_http_error() {
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
-
     let (host, _host_server) = start_mock_server(MockBridgeService {
         // The pre-read (all three constants) still succeeds; every subsequent *write*
         // is rejected at the transport level, so the very first write attempted
@@ -1377,7 +1387,8 @@ async fn write_run_reports_a_failed_write_as_200_not_an_http_error() {
         write_error: Some(tonic::Status::invalid_argument("nope")),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
 
     let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
@@ -1411,8 +1422,6 @@ async fn write_run_reports_a_failed_write_as_200_not_an_http_error() {
 
 #[tokio::test]
 async fn write_run_reports_a_failed_pre_read_as_200_not_an_http_error() {
-    use crate::test_support::mock_bridge::{MockBridgeService, start_mock_server};
-
     let (host, _host_server) = start_mock_server(MockBridgeService {
         // Every `read` (including the Proportional pre-read, the very first driver call
         // `write_pid_values` makes) is rejected at the transport level -- no `write` is
@@ -1420,7 +1429,8 @@ async fn write_run_reports_a_failed_pre_read_as_200_not_an_http_error() {
         read_error: Some(tonic::Status::unavailable("gateway unreachable")),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
 
     let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
@@ -1728,7 +1738,6 @@ async fn write_run_rejects_an_active_term_rounded_to_zero_before_connection() {
 
 #[tokio::test]
 async fn post_run_write_uses_the_same_rounded_targets_as_run_detail() {
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
     let (host, _host_server) = start_mock_server(MockBridgeService {
         read_response: good_reading("155.2"),
         write_response: opcda_bridge_proto::bridge::WriteResponse {
@@ -1738,7 +1747,8 @@ async fn post_run_write_uses_the_same_rounded_targets_as_run_detail() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
     let raw = 155.21378_f32;
@@ -1815,7 +1825,6 @@ async fn write_run_returns_400_when_the_driver_connection_fails() {
 
 #[tokio::test]
 async fn write_run_returns_400_when_the_gateway_core_is_incompatible() {
-    use crate::test_support::mock_bridge::{MockBridgeService, start_mock_server};
     use opcda_bridge_proto::bridge::{
         GetGatewayInfoResponse, ProtocolFeature, ProtocolFeatureKind,
     };
@@ -1832,7 +1841,8 @@ async fn write_run_returns_400_when_the_gateway_core_is_incompatible() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
 
     let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
@@ -1858,8 +1868,6 @@ async fn write_run_returns_400_when_the_gateway_core_is_incompatible() {
 
 #[tokio::test]
 async fn write_run_returns_409_when_another_operation_is_active() {
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
-
     let (host, _host_server) = start_mock_server(MockBridgeService {
         read_response: good_reading("10.0"),
         write_response: opcda_bridge_proto::bridge::WriteResponse {
@@ -1869,7 +1877,8 @@ async fn write_run_returns_409_when_another_operation_is_active() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
 
     let state = crate::test_support::in_memory_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
@@ -1890,8 +1899,6 @@ async fn write_run_returns_409_when_another_operation_is_active() {
 
 #[tokio::test]
 async fn revert_run_succeeds_and_records_a_revert_kind_row() {
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
-
     let (host, _host_server) = start_mock_server(MockBridgeService {
         read_response: good_reading("10.0"),
         write_response: opcda_bridge_proto::bridge::WriteResponse {
@@ -1901,7 +1908,8 @@ async fn revert_run_succeeds_and_records_a_revert_kind_row() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
 
     let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
@@ -1946,8 +1954,6 @@ async fn revert_run_succeeds_and_records_a_revert_kind_row() {
 
 #[tokio::test]
 async fn revert_run_can_restore_recorded_values_when_calculated_result_is_invalid() {
-    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
-
     let (host, _host_server) = start_mock_server(MockBridgeService {
         read_response: good_reading("10.0"),
         write_response: opcda_bridge_proto::bridge::WriteResponse {
@@ -1957,7 +1963,8 @@ async fn revert_run_can_restore_recorded_values_when_calculated_result_is_invali
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
 
     let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = start_opcda_run(&state).await;

@@ -24,22 +24,6 @@ use crate::{
     template::DcsTemplate,
 };
 
-/// Legacy-bug replication flags for this module, mirroring [`crate::mrft::MrftCompat`]'s
-/// pattern (see `docs/internal/design/correctness-register.md`). Every field defaults to
-/// `false`: the fixed, correct behavior.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TuningMathCompat {
-    /// Replicate `TuningConstantsCalc`'s period calculation, which reconstructs elapsed time
-    /// from a `TimeSpan`'s `.Hours`/`.Minutes`/`.Seconds` *component* properties instead of
-    /// its total duration. That has two effects, both reproduced together when this is
-    /// `true`: sub-second precision is silently dropped (`.Seconds` is an integer), and whole
-    /// days are silently dropped for any run lasting 24 hours or longer (`.Hours` wraps at
-    /// 24). The default (`false`) keeps millisecond precision and never wraps; set this
-    /// `true` only to reproduce the legacy behavior bit-for-bit against a captured legacy
-    /// trace.
-    pub replicate_period_truncation_bug: bool,
-}
-
 /// Oscillation measurements derived from a completed MRFT run, before applying any
 /// response-level-specific Kp multiplier. Pure port of the period/frequency/amplitude portion
 /// of `TuningConstantsCalc`.
@@ -192,7 +176,6 @@ impl CheckedTuningResult {
 /// them `num_cycles_count`, the other `num_cycles_count + 1`, alternating from the first
 /// recorded switch's direction). Both are impossible outputs from [`crate::mrft::MrftEngine`]
 /// and indicate a caller bug, not a runtime data problem.
-#[allow(clippy::too_many_arguments)]
 pub fn measure_oscillation(
     peaks: &[f32],
     troughs: &[f32],
@@ -201,7 +184,6 @@ pub fn measure_oscillation(
     direction: ControllerDirection,
     config: LoopConfig,
     pv_range: PvRange,
-    compat: TuningMathCompat,
 ) -> Oscillation {
     let num_cycles_count = config.num_cycles_count;
     assert!(
@@ -248,18 +230,10 @@ pub fn measure_oscillation(
         (peaks.iter().sum::<f32>(), troughs[1..].iter().sum::<f32>())
     };
 
-    // The compatibility path reproduces the legacy `TimeSpan` component arithmetic: it
-    // truncates to whole seconds and wraps after 24 hours (`elapsed_ms / 1000 % 86_400`).
-    // The default keeps the true elapsed milliseconds and never wraps. Short poll intervals
-    // can produce sub-second periods, so retaining millisecond precision is necessary to
-    // calculate nonzero `ti_minutes`/`td_minutes`; `bhtune-cli/tests/e2e_simulator.rs`
-    // exercises this with actual switch timestamps.
+    // Keep millisecond precision and total elapsed time: sub-second periods must stay nonzero,
+    // and long runs must not wrap after 24 hours.
     let elapsed_ms = (switch_times[switch_times.len() - 1] - switch_times[0]).num_milliseconds();
-    let secs_for_period = if compat.replicate_period_truncation_bug {
-        ((elapsed_ms / 1000) % 86_400) as f32
-    } else {
-        elapsed_ms as f32 / 1000.0
-    };
+    let secs_for_period = elapsed_ms as f32 / 1000.0;
     let period_minutes = (secs_for_period / 60.0) / num_cycles_count as f32;
     let frequency = 2.0 * std::f32::consts::PI / period_minutes;
 
@@ -477,7 +451,6 @@ pub fn calculate_all(
     config: LoopConfig,
     pv_range: PvRange,
     template: &DcsTemplate,
-    compat: TuningMathCompat,
 ) -> [(TuningResult, PidParameters); 3] {
     let osc = measure_oscillation(
         peaks,
@@ -487,7 +460,6 @@ pub fn calculate_all(
         direction,
         config,
         pv_range,
-        compat,
     );
     ResponseLevel::ALL.map(|level| {
         let result = calculate_tuning_result(osc, config, level);
@@ -512,7 +484,6 @@ pub fn calculate_all_checked(
     config: LoopConfig,
     pv_range: PvRange,
     template: &DcsTemplate,
-    compat: TuningMathCompat,
 ) -> [CheckedTuningResult; 3] {
     let oscillation = measure_oscillation(
         peaks,
@@ -522,7 +493,6 @@ pub fn calculate_all_checked(
         direction,
         config,
         pv_range,
-        compat,
     );
 
     let oscillation_reason = invalid_oscillation_reason(oscillation);
@@ -643,7 +613,6 @@ mod tests {
                 high: 100.0,
                 low: 0.0,
             },
-            TuningMathCompat::default(),
         );
         // period = (120s / 60) / 2 cycles = 1.0 minute
         assert_approx(osc.period_minutes, 1.0, 1e-6);
@@ -673,7 +642,6 @@ mod tests {
                 high: 100.0,
                 low: 0.0,
             },
-            TuningMathCompat::default(),
         );
         // peaks_sum = 52.0 + 48.0 = 100.0 (all of it, short array). troughs_sum excludes
         // index 0 (999.0, junk): 50.0 + 46.0 = 96.0.
@@ -698,7 +666,6 @@ mod tests {
                 high: 100.0,
                 low: 0.0,
             },
-            TuningMathCompat::default(),
         );
         assert_approx(osc.pv_amp_raw, 1.0, 1e-5);
     }
@@ -717,7 +684,6 @@ mod tests {
                 high: 100.0,
                 low: 0.0,
             },
-            TuningMathCompat::default(),
         );
     }
 
@@ -735,7 +701,6 @@ mod tests {
                 high: 100.0,
                 low: 0.0,
             },
-            TuningMathCompat::default(),
         );
     }
 
@@ -753,20 +718,16 @@ mod tests {
                 high: 100.0,
                 low: 0.0,
             },
-            TuningMathCompat::default(),
         );
     }
 
-    /// A run "lasting" >= 24 hours: the fixed (default) period calculation uses the true
-    /// total elapsed time, while the compat flag reproduces the legacy bug that silently
-    /// drops whole days (`TimeSpan.Hours` wraps at 24). Verified against the independent
-    /// Python oracle: 90000s total / 2 cycles => 750.0 minutes fixed, vs (90000 % 86400) =
-    /// 3600s => 30.0 minutes with the bug.
+    /// A run lasting >= 24 hours uses its full duration rather than wrapping at 24 hours.
+    /// Verified against the independent Python oracle: 90000s total / 2 cycles => 750.0 minutes.
     #[test]
-    fn measure_oscillation_period_truncation_bug_vs_fixed() {
+    fn measure_oscillation_period_includes_full_elapsed_time() {
         let switch_times = [t(0), t(20_000), t(40_000), t(60_000), t(90_000)];
 
-        let fixed = measure_oscillation(
+        let oscillation = measure_oscillation(
             &[999.0, 52.0, 48.0],
             &[50.0, 46.0],
             &switch_times,
@@ -777,34 +738,15 @@ mod tests {
                 high: 100.0,
                 low: 0.0,
             },
-            TuningMathCompat::default(),
         );
-        assert_approx(fixed.period_minutes, 750.0, 1e-3);
-
-        let buggy = measure_oscillation(
-            &[999.0, 52.0, 48.0],
-            &[50.0, 46.0],
-            &switch_times,
-            1,
-            ControllerDirection::Reverse,
-            flow_pi_config(),
-            PvRange {
-                high: 100.0,
-                low: 0.0,
-            },
-            TuningMathCompat {
-                replicate_period_truncation_bug: true,
-            },
-        );
-        assert_approx(buggy.period_minutes, 30.0, 1e-3);
+        assert_approx(oscillation.period_minutes, 750.0, 1e-3);
     }
 
-    /// A run lasting well under one second total verifies the *default* path preserves
-    /// millisecond precision, while the compatibility path reproduces whole-second
-    /// truncation. This keeps short-period calculations meaningful for fast loops with short
-    /// poll intervals; `bhtune-cli/tests/e2e_simulator.rs` also exercises real switch times.
+    /// A run lasting well under one second verifies that millisecond precision keeps short
+    /// periods meaningful for fast loops with short poll intervals;
+    /// `bhtune-cli/tests/e2e_simulator.rs` also exercises real switch times.
     #[test]
-    fn measure_oscillation_keeps_sub_second_precision_by_default() {
+    fn measure_oscillation_keeps_sub_second_precision() {
         let t_ms = |offset_ms: i64| {
             DateTime::<Utc>::UNIX_EPOCH + chrono::Duration::milliseconds(offset_ms)
         };
@@ -823,7 +765,6 @@ mod tests {
                 high: 100.0,
                 low: 0.0,
             },
-            TuningMathCompat::default(),
         );
 
         // period = (0.3s / 60) / 2 cycles = 0.0025 minutes -- small, but the bug this guards
@@ -852,7 +793,6 @@ mod tests {
                 high: 100.0,
                 low: 0.0,
             },
-            TuningMathCompat::default(),
         );
         assert_approx(osc.pv_amp_raw, 1.0, 1e-6);
     }
@@ -870,7 +810,6 @@ mod tests {
                 high: 100.0,
                 low: 20.0,
             },
-            TuningMathCompat::default(),
         );
         assert_approx(osc.pv_amp_raw, 1.0, 1e-6);
         assert_approx(osc.pv_amp_percent, 1.25, 1e-6);
@@ -1215,7 +1154,6 @@ mod tests {
                 low: 0.0,
             },
             &template,
-            TuningMathCompat::default(),
         );
 
         assert_eq!(results[0].1.response_level, ResponseLevel::Aggressive);
@@ -1250,7 +1188,6 @@ mod tests {
                 low: 0.0,
             },
             template,
-            TuningMathCompat::default(),
         )
     }
 
@@ -1588,7 +1525,7 @@ mod tests {
     /// glue beyond what `Action::Complete` already carries.
     #[test]
     fn calculate_all_consumes_a_real_mrft_engine_completion() {
-        use crate::mrft::{Action, InitialReadings, MrftCompat, MrftEngine, Tick};
+        use crate::mrft::{Action, InitialReadings, MrftEngine, Tick};
         use std::collections::VecDeque;
 
         let config = flow_pi_config();
@@ -1603,14 +1540,8 @@ mod tests {
             mv_range_low: 0.0,
             mv_range_high: 100.0,
         };
-        let mut engine = MrftEngine::new(
-            config,
-            ControllerDirection::Reverse,
-            tc.beta,
-            initial,
-            t(0),
-            MrftCompat::default(),
-        );
+        let mut engine =
+            MrftEngine::new(config, ControllerDirection::Reverse, tc.beta, initial, t(0));
 
         // A minimal first-order-plus-dead-time process reacting to the engine's own
         // relay-driven MV: pv exponentially approaches a target set by a *delayed* view of
@@ -1671,7 +1602,6 @@ mod tests {
                 low: 0.0,
             },
             &template,
-            TuningMathCompat::default(),
         );
 
         // Just confirm the pipeline produced finite, sane-signed output — the precise

@@ -82,9 +82,7 @@ pub struct NewRunDraft {
     pub restore_timeout_secs: Option<u64>,
     pub direction: Option<ControllerDirection>,
     pub tag_overrides: Option<TagOverrides>,
-    /// Driver context for the saved direction/range values. New drafts keep this alongside
-    /// source metadata; older drafts use it to infer whether legacy values are OPC fixed
-    /// overrides or simulator values.
+    /// Driver context for the saved direction/range values, alongside their source metadata.
     pub source_driver: Option<TuneDriver>,
     /// Simulator-specific direction/range values. These are draft-only and never go into a
     /// run request when the OPC DA driver is active.
@@ -409,75 +407,6 @@ mod tests {
         assert_eq!(saved.source_pv_range_low, Some(10.0));
         assert_eq!(saved.source_mv_range_high, Some(75.0));
         assert_eq!(saved.source_mv_range_low, Some(5.0));
-        assert!(
-            serde_json::from_slice::<serde_json::Value>(&body)
-                .unwrap()
-                .get("notes")
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn legacy_saved_draft_without_source_fields_still_deserializes() {
-        let state = crate::test_support::in_memory_state().await;
-        SettingRow::upsert(
-            &state.pool,
-            NEW_RUN_DRAFT_KEY,
-            &json!({
-                "driver": "opcda",
-                "template": "Yokogawa CentumVP",
-                "tagname": "Loop3.PV",
-                "server": "Sim.Server",
-                "bridge_host": "localhost:7600",
-                "process_type": "flow",
-                "controller_type": "pi",
-                "relay_amp": 5.0,
-                "cycles_skip": 1,
-                "cycles_count": 3,
-                "noise_protection_secs": 0,
-                "mrft_delay": 0,
-                "poll_interval_ms": 800,
-                "timeout_secs": 3600,
-                "op_timeout_secs": 30,
-                "restore_timeout_secs": 30,
-                "allow_uncertain_quality": false,
-                "direction": "reverse",
-                "tag_overrides": null,
-                "pv_range_high": 100.0,
-                "pv_range_low": 0.0,
-                "mv_range_high": 100.0,
-                "mv_range_low": 0.0,
-                "sim_gain": 1.0,
-                "sim_tau": 2.0,
-                "sim_dead_time": 5.0,
-                "sim_noise": 0.0,
-                "sim_seed": 123,
-                "sim_initial_pv": 50.0,
-                "sim_initial_mv": 50.0,
-                "write_pid": "moderate",
-                "yes": true
-            }),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-
-        let app = crate::build_router(state);
-        let response = app
-            .oneshot(
-                Request::get("/api/runs/draft")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let saved: NewRunDraft = serde_json::from_slice(&body).unwrap();
-        assert_eq!(saved.source_driver, None);
-        assert_eq!(saved.source_direction, None);
-        assert_eq!(saved.source_pv_range_high, None);
-        assert_eq!(saved.source_mv_range_low, None);
         assert!(
             serde_json::from_slice::<serde_json::Value>(&body)
                 .unwrap()

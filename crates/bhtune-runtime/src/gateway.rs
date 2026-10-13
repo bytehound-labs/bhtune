@@ -33,16 +33,9 @@ pub fn compatibility_json(report: &OpcDaGatewayCompatibility) -> String {
     serde_json::to_string(report).unwrap_or_default()
 }
 
-/// Parses a stored snapshot, returning `None` when the historical JSON cannot be read.
-#[must_use]
-pub fn parse_stored_compatibility(json: &str) -> Option<OpcDaGatewayCompatibility> {
-    match serde_json::from_str(json) {
-        Ok(report) => Some(report),
-        Err(error) => {
-            tracing::warn!("stored gateway compatibility snapshot could not be parsed: {error}");
-            None
-        }
-    }
+/// Parses a stored compatibility snapshot.
+pub fn parse_stored_compatibility(json: &str) -> anyhow::Result<OpcDaGatewayCompatibility> {
+    serde_json::from_str(json).context("stored gateway compatibility snapshot could not be parsed")
 }
 
 #[cfg(test)]
@@ -128,8 +121,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_stored_compatibility_returns_none_for_an_unreadable_snapshot() {
-        assert!(parse_stored_compatibility("not-a-report").is_none());
-        assert!(parse_stored_compatibility(r#"{"status":"unknown"}"#).is_none());
+    fn parse_stored_compatibility_rejects_an_unreadable_snapshot() {
+        assert!(parse_stored_compatibility("not-a-report").is_err());
+        assert!(parse_stored_compatibility(r#"{"status":"unknown"}"#).is_err());
     }
 }

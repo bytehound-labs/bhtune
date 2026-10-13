@@ -166,6 +166,7 @@ operations reserve the registry exclusively so they cannot overlap a tune or ano
 **`StartRunRequest` and CLI `TuneArgs` convert to the runtime's `ValidatedTuneRequest`** before
 preparation. Runtime constants supply the shared simulator defaults; process-dependent cycle
 and noise-protection defaults and operational timing are resolved by the same runtime path.
+The HTTP request schema rejects unknown fields, including obsolete per-request timing fields.
 The runtime request validator owns common finite-float, optional-range, positive supplied-cycle,
 and tag-override checks. The CLI's clap parsers call the same finite and positive-value helpers
 to preserve early parse errors; the HTTP adapter maps those shared validation errors to `400`
@@ -282,9 +283,8 @@ graceful-shutdown request drain already covers it). A physical write/revert fail
 an ordinary `200` with the failure visible in the returned `writes[]` audit row, never a `4xx`/`5xx`
 — matching how a failed write already behaved during an in-run write-back, and confirmed directly by
 a dedicated test. Route tests use the shared unpublished `bhtune-test-support` mock
-gRPC `Bridge` service through `crate::test_support::mock_bridge`. The same service backs
-`bhtune_cli::test_support` and `driver-opcda` smoke tests, so the three consumers cannot
-drift. Both new routes
+gRPC `Bridge` service directly, as do CLI and driver tests, so the three consumers cannot drift.
+Both new routes
 were initially missing from `openapi.rs`'s explicit `paths(...)`/ `components(schemas(...))` lists —
 that module's own doc comment warns this fails silently (the route works; it's just absent from the
 spec) rather than loudly, and this was exactly the omission it warned about; fixed before

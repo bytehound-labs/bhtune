@@ -374,7 +374,6 @@ test.describe("New Tune draft persistence", () => {
         cycles_skip: 1,
         cycles_count: 2,
         noise_protection_secs: 0,
-        mrft_delay: 0,
         driver: "simulator",
         sim_gain: 1,
         sim_tau: 0.01,
@@ -391,10 +390,6 @@ test.describe("New Tune draft persistence", () => {
         tag_overrides: {
           manipulated_variable: "Duplicate.Loop.PY",
         },
-        poll_interval_ms: 5,
-        timeout_secs: 30,
-        op_timeout_secs: 30,
-        restore_timeout_secs: 30,
         yes: false,
       },
     });

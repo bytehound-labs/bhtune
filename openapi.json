@@ -3721,7 +3721,7 @@
               },
               {
                 "$ref": "#/components/schemas/TuneDriver",
-                "description": "Driver context for the saved direction/range values. New drafts keep this alongside\nsource metadata; older drafts use it to infer whether legacy values are OPC fixed\noverrides or simulator values."
+                "description": "Driver context for the saved direction/range values, alongside their source metadata."
               }
             ]
           },
@@ -5214,7 +5214,8 @@
             "type": "boolean",
             "description": "Confirm an unattended PID write-back. Required alongside `write_pid` -- the request\nis rejected otherwise, identically to `--write-pid` without `--yes` on the CLI."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "TagOverrides": {
         "type": "object",

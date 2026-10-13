@@ -470,7 +470,13 @@ fn print_show_table(
     results: &[TuneResultRow],
     writes: &[TuneWriteRow],
     mv_actuations: &[TuneMvActuationRow],
-) {
+) -> anyhow::Result<()> {
+    let gateway_compatibility = run
+        .gateway_compatibility_json
+        .as_deref()
+        .map(crate::gateway::parse_stored_compatibility)
+        .transpose()?;
+
     println!("Run #{} — Tag name: {}", run.id, run.loop_name);
     println!("  Notes:           {}", run.notes.as_deref().unwrap_or("—"));
     println!("  Driver:          {:?}", run.driver);
@@ -493,11 +499,7 @@ fn print_show_table(
             run.bridge_host.as_deref().unwrap_or("-"),
         );
     }
-    if let Some(snapshot) = run
-        .gateway_compatibility_json
-        .as_deref()
-        .and_then(crate::gateway::parse_stored_compatibility)
-    {
+    if let Some(snapshot) = gateway_compatibility {
         println!(
             "  Gateway compatibility: {} ({})",
             snapshot.status.as_str(),
@@ -590,6 +592,7 @@ fn print_show_table(
     print_show_results(run, results);
     print_show_writes(writes);
     print_show_mv_actuations(mv_actuations);
+    Ok(())
 }
 
 fn print_show_results(run: &TuneRunRow, results: &[TuneResultRow]) {
@@ -742,7 +745,8 @@ fn print_show_json(
         gateway_compatibility: run
             .gateway_compatibility_json
             .as_deref()
-            .and_then(crate::gateway::parse_stored_compatibility),
+            .map(crate::gateway::parse_stored_compatibility)
+            .transpose()?,
         initial_readings: run
             .initial_readings
             .as_ref()
@@ -772,7 +776,7 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
     let mv_actuations = TuneMvActuationRow::list_for_run(pool, run_id).await?;
 
     match output {
-        OutputFormat::Table => print_show_table(&run, &samples, &results, &writes, &mv_actuations),
+        OutputFormat::Table => print_show_table(&run, &samples, &results, &writes, &mv_actuations)?,
         OutputFormat::Json => print_show_json(&run, &samples, &results, &writes, &mv_actuations)?,
     }
 
@@ -1860,7 +1864,7 @@ mod tests {
 
     #[tokio::test]
     async fn revert_succeeds_and_records_a_revert_kind_write() {
-        use crate::test_support::{MockBridgeService, start_mock_server};
+        use bhtune_test_support::{MockBridgeService, start_mock_server};
         use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue, WriteResponse};
 
         // Every read (both the live pre-read and every write's confirmation readback)
@@ -1884,7 +1888,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         let (pool, run_id) = opcda_run_with_no_writes(&host, "Sim.Server").await;
         let now = chrono::Utc::now();
@@ -1943,7 +1948,7 @@ mod tests {
 
     #[tokio::test]
     async fn revert_refuses_an_incompatible_gateway_before_writing() {
-        use crate::test_support::{MockBridgeService, start_mock_server};
+        use bhtune_test_support::{MockBridgeService, start_mock_server};
         use opcda_bridge_proto::bridge::{
             GetGatewayInfoResponse, ProtocolFeature, ProtocolFeatureKind,
         };
@@ -1960,7 +1965,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         let (pool, run_id) = opcda_run_with_no_writes(&host, "Sim.Server").await;
         let now = chrono::Utc::now();
@@ -1995,7 +2001,7 @@ mod tests {
 
     #[tokio::test]
     async fn revert_records_a_failed_audit_row_when_a_later_constant_fails_verification() {
-        use crate::test_support::{MockBridgeService, start_mock_server};
+        use bhtune_test_support::{MockBridgeService, start_mock_server};
         use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue, WriteResponse};
 
         // Calls 1-3: the live pre-read of P/I/D (all succeed). Call 4: Proportional's
@@ -2021,7 +2027,8 @@ mod tests {
             }
             .failing_read_from_call(5),
         )
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         let (pool, run_id) = opcda_run_with_no_writes(&host, "Sim.Server").await;
         let now = chrono::Utc::now();
@@ -2073,7 +2080,7 @@ mod tests {
 
     #[tokio::test]
     async fn revert_succeeds_with_json_output_format() {
-        use crate::test_support::{MockBridgeService, start_mock_server};
+        use bhtune_test_support::{MockBridgeService, start_mock_server};
         use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue, WriteResponse};
 
         // This isn't a substitute for a real stdout-capture test proving JSON mode never
@@ -2099,7 +2106,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         let (pool, run_id) = opcda_run_with_no_writes(&host, "Sim.Server").await;
         let now = chrono::Utc::now();

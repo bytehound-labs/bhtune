@@ -875,7 +875,7 @@ fn quality_name(quality: Quality) -> &'static str {
 mod tests {
     use super::*;
     use crate::args::SearchIndexControlActionArg;
-    use crate::test_support::{MockBridgeService, start_mock_server};
+    use bhtune_test_support::{MockBridgeService, start_mock_server};
     use opcda_bridge_proto::bridge::{
         BrowseNode, BrowseNodeKind, BrowsePage, GetGatewayInfoResponse, ListServersResponse,
         ProtocolFeature, ProtocolFeatureKind, ReadResponse, SearchCompleted,
@@ -898,7 +898,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         gateway_info(&host).await.unwrap();
         gateway_info_with_output(&host, OutputFormat::Json)
@@ -946,7 +947,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         let report = check_gateway_compatibility(&host, None).await.unwrap();
         assert_eq!(report.status.as_str(), "full");
@@ -976,7 +978,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         servers(&host).await.unwrap();
 
@@ -985,7 +988,9 @@ mod tests {
 
     #[tokio::test]
     async fn servers_handles_an_empty_result() {
-        let (host, server) = start_mock_server(MockBridgeService::default()).await;
+        let (host, server) = start_mock_server(MockBridgeService::default())
+            .await
+            .expect("bind mock bridge");
         servers(&host).await.unwrap();
         server.shutdown().await;
     }
@@ -1009,7 +1014,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         read(&host, "Sim.Server", &["Unit1.LIC101.PV".to_string()])
             .await
@@ -1035,7 +1041,7 @@ mod tests {
             ..Default::default()
         };
         let write_calls = std::sync::Arc::clone(&service.write_calls);
-        let (host, server) = start_mock_server(service).await;
+        let (host, server) = start_mock_server(service).await.expect("bind mock bridge");
         let directory = tempfile::tempdir().unwrap();
         let pool = bhtune_db::connect(&directory.path().join("opc-write-audit.db"))
             .await
@@ -1089,7 +1095,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         let err = write(&host, "Sim.Server", "Unit1.LIC101.OP", "55.0")
             .await
@@ -1109,7 +1116,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         let err = write(&host, "Sim.Server", "Unit1.LIC101.OP", "55.0")
             .await
@@ -1182,7 +1190,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         write(&host, "Sim.Server", "Unit1.LIC101.MODE", "MAN")
             .await
@@ -1207,7 +1216,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
 
         browse(&host, "Sim.Server", "").await.unwrap();
 
@@ -1216,7 +1226,9 @@ mod tests {
 
     #[tokio::test]
     async fn browse_handles_an_empty_result() {
-        let (host, server) = start_mock_server(MockBridgeService::default()).await;
+        let (host, server) = start_mock_server(MockBridgeService::default())
+            .await
+            .expect("bind mock bridge");
         browse(&host, "Sim.Server", "Unit1").await.unwrap();
         server.shutdown().await;
     }
@@ -1272,7 +1284,8 @@ mod tests {
             close_browse_session_calls: close_browse_session_calls.clone(),
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
         let config = crate::config::BhtuneConfig::default();
 
         run(
@@ -1372,7 +1385,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
         let config = crate::config::BhtuneConfig {
             bridge_host: Some(host),
             server: Some("Sim.Server".to_string()),
@@ -1397,7 +1411,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_resolves_bridge_host_from_config_for_servers_when_cli_flag_is_unset() {
-        let (host, server) = start_mock_server(MockBridgeService::default()).await;
+        let (host, server) = start_mock_server(MockBridgeService::default())
+            .await
+            .expect("bind mock bridge");
         let config = crate::config::BhtuneConfig {
             bridge_host: Some(host),
             ..Default::default()
@@ -1494,7 +1510,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
         let config = crate::config::BhtuneConfig::default();
         let pool = bhtune_db::connect_in_memory().await.unwrap();
 
@@ -1689,7 +1706,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let (host, server) = start_mock_server(host_service).await;
+        let (host, server) = start_mock_server(host_service)
+            .await
+            .expect("bind mock bridge");
         let directory = tempfile::tempdir().unwrap();
         let pool = bhtune_db::connect(&directory.path().join("opc-diagnostic-test.db"))
             .await
@@ -1798,7 +1817,8 @@ mod tests {
             },
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
         write_with_output(
             &pool,
             &host,
@@ -1825,7 +1845,8 @@ mod tests {
             }],
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
         search_with_output(
             &host,
             "Sim.Server",
@@ -1862,7 +1883,8 @@ mod tests {
             }),
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
         let err = browse_with_output(
             &host,
             "Sim.Server",

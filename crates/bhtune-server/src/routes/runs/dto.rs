@@ -43,6 +43,7 @@ fn default_sim_initial_value() -> f32 {
 /// safe precisely because `request_json` is *already* built to this exact shape -- the
 /// runtime's `RequestSnapshot` serializes the same transport-neutral request fields.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StartRunRequest {
     /// PV tag prefix; ignored for `driver: "simulator"`.
     pub tagname: String,
