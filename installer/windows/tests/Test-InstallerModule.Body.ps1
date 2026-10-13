@@ -1392,6 +1392,31 @@ exit 7
     Exit-InstallerTransactionLock -Lock $lockAgain
     Assert-True -Condition $true -Message 'released installer mutex permits a subsequent transaction'
 
+    $registryRacePath = "HKCU:\Software\BhtuneRegistrySnapshot-$([guid]::NewGuid().ToString('N'))"
+    New-Item -Path $registryRacePath -Force | Out-Null
+    $script:RegistrySnapshotRacePath = $registryRacePath
+    try {
+        function Get-ItemProperty {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$LiteralPath
+            )
+
+            if ($LiteralPath -eq $script:RegistrySnapshotRacePath) {
+                Remove-Item -LiteralPath $LiteralPath -Force -ErrorAction Stop
+            }
+            Microsoft.PowerShell.Management\Get-ItemProperty -LiteralPath $LiteralPath -ErrorAction Stop
+        }
+        Assert-Null `
+            -Actual (Get-RegistrySnapshot -Path $registryRacePath) `
+            -Message 'a registry key disappearing during a snapshot is treated as absent'
+    } finally {
+        Remove-Item Function:\Get-ItemProperty -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $registryRacePath -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Variable -Name RegistrySnapshotRacePath -Scope Script -ErrorAction SilentlyContinue
+    }
+
     $script:MockMarker = $null
     $script:MockUninstall = $null
     $script:MockService = $null

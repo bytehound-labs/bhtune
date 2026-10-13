@@ -53,6 +53,9 @@ The narrow pre-journal window can leave only empty fixed directories after power
 service, payload, or data replacement has occurred at that point, and a later run can safely
 reuse them.
 
+Registry snapshots treat only a missing-key response as absence; other provider errors remain
+fatal.
+
 **The PowerShell implementation is one shared-scope module.** `BhtuneInstaller.psm1` dot-sources
 the ordered domain scripts from `Private/` and explicitly exports only the installer entrypoint
 and gateway payload validation functions. `Install-Bhtune.ps1` binds the existing command-line

@@ -200,11 +200,11 @@ function Get-RegistrySnapshot {
         [string]$Path
     )
 
-    if (-not (Test-Path -LiteralPath $Path)) {
+    try {
+        $properties = Get-ItemProperty -LiteralPath $Path -ErrorAction Stop
+    } catch [System.Management.Automation.ItemNotFoundException] {
         return $null
     }
-
-    $properties = Get-ItemProperty -LiteralPath $Path
     $values = [ordered]@{}
     foreach ($property in $properties.PSObject.Properties) {
         if ($property.Name -notlike 'PS*') {
