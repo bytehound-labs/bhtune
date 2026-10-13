@@ -892,8 +892,8 @@ mod tests {
     #[tokio::test]
     async fn mrft_engine_completes_a_realistic_relay_test_against_the_simulator_driver() {
         use bhtune_core::{
-            Action, ControllerDirection, ControllerType, InitialReadings, LoopConfig, MrftCompat,
-            MrftEngine, ProcessType, ResponseLevel, Tick, lookup,
+            Action, ControllerDirection, ControllerType, InitialReadings, LoopConfig, MrftEngine,
+            ProcessType, ResponseLevel, Tick, lookup,
         };
         use chrono::{TimeZone, Utc};
 
@@ -941,7 +941,6 @@ mod tests {
             tc.beta,
             initial,
             start_time,
-            MrftCompat::default(),
         );
 
         let mut completion = None;

@@ -56,38 +56,14 @@ pub(crate) async fn file_backed_state() -> (AppState, tempfile::TempDir) {
     (state, directory)
 }
 
-/// Shared mock `Bridge` for route tests that need a real `OpcDaDriver` round trip.
-///
-/// The service and server live in `bhtune-test-support`. `good_reading` stays here
-/// because only these route fixtures use that canned value.
-pub(crate) mod mock_bridge {
-    use opcda_bridge_proto::bridge::ReadResponse;
-
-    pub(crate) use bhtune_test_support::{MockBridgeService, MockServerHandle};
-
-    /// Binds `service` on an ephemeral localhost port. The returned handle must
-    /// stay in scope so the server task is not dropped before the request finishes.
-    pub(crate) async fn start_mock_server(
-        service: MockBridgeService,
-    ) -> (String, MockServerHandle) {
-        bhtune_test_support::start_mock_server(service)
-            .await
-            .expect("bind mock bridge")
-    }
-
-    /// A "Good"-quality reading, regardless of which tag was requested --
-    /// matching the `bhtune` package's own `history::revert` test fixtures' rationale: every
-    /// pre-read and every write's confirmation readback returns this same value, so a
-    /// fixture that also writes/reverts to `10.0` always sees a matching readback no
-    /// matter which of the three PID constants is being processed.
-    pub(crate) fn good_reading(value: &str) -> ReadResponse {
-        ReadResponse {
-            values: vec![opcda_bridge_proto::bridge::TagValue {
-                tag_id: "ignored".to_string(),
-                value: value.to_string(),
-                quality: "Good".to_string(),
-                timestamp: "2024-01-15 10:23:45".to_string(),
-            }],
-        }
+/// A "Good"-quality reading for fixtures whose handler does not echo the requested tag.
+pub(crate) fn good_reading(value: &str) -> opcda_bridge_proto::bridge::ReadResponse {
+    opcda_bridge_proto::bridge::ReadResponse {
+        values: vec![opcda_bridge_proto::bridge::TagValue {
+            tag_id: "ignored".to_string(),
+            value: value.to_string(),
+            quality: "Good".to_string(),
+            timestamp: "2024-01-15 10:23:45".to_string(),
+        }],
     }
 }

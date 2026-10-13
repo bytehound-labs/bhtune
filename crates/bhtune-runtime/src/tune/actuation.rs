@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use bhtune_core::LoopConfig;
 use bhtune_core::mrft::clamp_relay_amplitude;
-use bhtune_core::{LoopConfig, MrftCompat};
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
     MvActuationKind, MvActuationStatus, NewTuneMvActuation, SampleQuality, TuneMvActuationRow,
@@ -335,7 +335,6 @@ pub(super) fn validate_relay_actuation_step(
         initial.mv_ini,
         initial.mv_range_low,
         initial.mv_range_high,
-        MrftCompat::default(),
     );
     mv_actuation_tolerance(
         MvActuationKind::Relay,

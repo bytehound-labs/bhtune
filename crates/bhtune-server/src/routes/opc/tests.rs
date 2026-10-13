@@ -5,13 +5,13 @@ use super::super::{
     GatewayFeatureCompatibilityResponse, GatewayProtocolRangeResponse, OpcBrowseNodeKind,
 };
 use super::*;
-use crate::test_support::mock_bridge::{MockBridgeService, start_mock_server};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use bhtune_driver::{
     BrowseNode, BrowseNodeKind, BrowseSource, DriverResult, NamespaceOrganization, SearchEvent,
     SearchMatch,
 };
+use bhtune_test_support::{MockBridgeService, start_mock_server};
 use opcda_bridge_proto::bridge::{
     BrowseNode as ProtoBrowseNode, BrowseNodeKind as ProtoBrowseNodeKind, BrowsePage,
     BrowseSource as ProtoBrowseSource, IndexSchedulerDiagnostics as ProtoIndexSchedulerDiagnostics,
@@ -194,7 +194,8 @@ async fn servers_returns_every_registered_server_from_a_mock_gateway() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), None).await);
 
     let response = get(app, "/api/opc/servers").await;
@@ -208,7 +209,9 @@ async fn servers_returns_every_registered_server_from_a_mock_gateway() {
 
 #[tokio::test]
 async fn servers_handles_an_empty_result() {
-    let (host, _host_server) = start_mock_server(MockBridgeService::default()).await;
+    let (host, _host_server) = start_mock_server(MockBridgeService::default())
+        .await
+        .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), None).await);
 
     let response = get(app, "/api/opc/servers").await;
@@ -235,7 +238,9 @@ async fn servers_returns_400_when_the_gateway_is_unreachable() {
 
 #[tokio::test]
 async fn servers_query_param_overrides_the_configured_bridge_host() {
-    let (host, _host_server) = start_mock_server(MockBridgeService::default()).await;
+    let (host, _host_server) = start_mock_server(MockBridgeService::default())
+        .await
+        .expect("bind mock bridge");
     // Config points at an unreachable host; the query param must win.
     let app = crate::build_router(state_with(Some("127.0.0.1:1"), None).await);
 
@@ -262,7 +267,8 @@ async fn capabilities_reports_the_indexed_search_contract() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/capabilities").await;
@@ -295,7 +301,8 @@ async fn search_index_status_maps_every_state_and_progress() {
             search_index_status_requests: requests.clone(),
             ..Default::default()
         })
-        .await;
+        .await
+        .expect("bind mock bridge");
         let app = crate::build_router(state_with(Some(&host), None).await);
 
         let response = get(app, "/api/opc/search-index/status?opc_server=Sim.Server").await;
@@ -351,7 +358,8 @@ async fn search_index_returns_exact_matches_status_and_has_more() {
         search_index_requests: requests.clone(),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), None).await);
 
     let response = get(
@@ -390,7 +398,8 @@ async fn search_index_refresh_and_control_forward_actions() {
         control_search_index_requests: control_requests.clone(),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
 
     let refresh_app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
     let response = post(refresh_app, "/api/opc/search-index/refresh?force=true").await;
@@ -493,7 +502,8 @@ async fn indexed_search_routes_surface_gateway_errors() {
         control_search_index_error: Some(tonic::Status::internal("control failed")),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let paths = [
         (
             "/api/opc/search-index/status?opc_server=Sim.Server",
@@ -555,7 +565,8 @@ async fn indexed_search_status_reports_an_unsupported_gateway() {
         )),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), None).await);
 
     let response = get(app, "/api/opc/search-index/status?opc_server=Sim.Server").await;
@@ -587,7 +598,8 @@ async fn browse_returns_nodes_from_a_mock_gateway() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/browse").await;
@@ -600,7 +612,9 @@ async fn browse_returns_nodes_from_a_mock_gateway() {
 
 #[tokio::test]
 async fn browse_handles_an_empty_result() {
-    let (host, _host_server) = start_mock_server(MockBridgeService::default()).await;
+    let (host, _host_server) = start_mock_server(MockBridgeService::default())
+        .await
+        .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(
@@ -646,7 +660,9 @@ async fn browse_returns_400_when_the_gateway_is_unreachable() {
 
 #[tokio::test]
 async fn close_browse_session_forwards_the_opaque_session_id() {
-    let (host, _host_server) = start_mock_server(MockBridgeService::default()).await;
+    let (host, _host_server) = start_mock_server(MockBridgeService::default())
+        .await
+        .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
     let response = get(
         app,
@@ -710,7 +726,8 @@ async fn search_stream_returns_match_progress_and_completed_events() {
         ],
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
     let response = get(
         app,
@@ -743,7 +760,8 @@ async fn read_returns_the_value_quality_and_timestamp_from_a_mock_gateway() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/read?tag=Unit1.LIC101.PV").await;
@@ -763,15 +781,16 @@ async fn read_returns_the_value_quality_and_timestamp_from_a_mock_gateway() {
 async fn read_returns_500_when_the_driver_reports_success_but_no_value() {
     // A well-behaved driver never does this for a single requested tag -- but the mock
     // gateway's `read` RPC ignores the actual request and returns whatever
-    // `read_response` is configured with (see `test_support::mock_bridge`'s `read`
-    // implementation), which makes this defensive `ApiError::Internal` branch (a bug in
+    // `read_response` is configured with (see `bhtune_test_support`'s `read` implementation),
+    // which makes this defensive `ApiError::Internal` branch (a bug in
     // the driver, not a client mistake) reachable in a test without needing a real
     // misbehaving gateway.
     let (host, _host_server) = start_mock_server(MockBridgeService {
         read_response: ReadResponse { values: vec![] },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/read?tag=Unit1.LIC101.PV").await;
@@ -855,7 +874,8 @@ async fn read_returns_400_when_the_connected_gateway_rejects_the_read() {
         read_error: Some(tonic::Status::unavailable("read unavailable")),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/read?tag=Unit1.LIC101.PV").await;
@@ -881,7 +901,8 @@ async fn read_surfaces_uncertain_and_bad_quality_without_failing() {
         },
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/read?tag=Unit1.LIC101.PV").await;
@@ -1068,7 +1089,8 @@ async fn capabilities_degrades_when_the_gateway_predates_capability_discovery() 
         capabilities_error: Some(tonic::Status::unimplemented("capability discovery")),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/capabilities").await;
@@ -1087,7 +1109,8 @@ async fn capabilities_returns_400_when_capability_discovery_fails() {
         capabilities_error: Some(tonic::Status::internal("boom")),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/capabilities").await;
@@ -1108,7 +1131,8 @@ async fn browse_degrades_when_the_gateway_predates_paged_browse() {
         browse_error: Some(tonic::Status::unimplemented("paged browse")),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/browse").await;
@@ -1128,7 +1152,8 @@ async fn browse_returns_400_when_paged_browse_fails() {
         browse_error: Some(tonic::Status::internal("boom")),
         ..Default::default()
     })
-    .await;
+    .await
+    .expect("bind mock bridge");
     let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
     let response = get(app, "/api/opc/browse").await;

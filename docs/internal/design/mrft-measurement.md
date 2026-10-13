@@ -13,13 +13,11 @@ is recorded for that interval and seeds the newly opened interval. The hysteresi
 reset to `pv_value_ini`, so this correction cannot change switch timing, MV commands, actuation
 verification, or the recorded sample trail.
 
-`MrftCompat::replicate_extrema_reset_bug` retains the legacy reset-to-`pv_value_ini` behavior for
-parity experiments only. It is not enabled by production callers. The committed
-`flow_pi_direct` golden fixture remains a regression oracle for the legacy observable state, but
-it cannot distinguish this correction from the legacy behavior because its switches occur before
-the discarded boundary extrema matter. A recorded trace also cannot validate the coupled
-hysteresis change: changing the switch schedule would change the plant response that the trace
-contains.
+This fixed measurement behavior applies to every run. The committed `flow_pi_direct` golden
+fixture remains a regression oracle for the legacy observable state, but it cannot distinguish
+this correction from the legacy behavior because its switches occur before the discarded boundary
+extrema matter. A recorded trace also cannot validate the coupled hysteresis change: changing the
+switch schedule would change the plant response that the trace contains.
 
 Production result persistence uses `calculate_all_checked`, not the legacy numeric
 `calculate_all` entry point used by parity/replay callers. A result is `Valid` only when its PV

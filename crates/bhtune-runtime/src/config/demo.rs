@@ -784,20 +784,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn demo_policy_config_rejects_legacy_conflated_rate_keys() {
-        let error = toml::from_str::<BhtuneConfig>(
-            r"
-[demo]
-token_requests_per_window = 64
-ip_requests_per_window = 10
-rate_window_secs = 10
-",
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("unknown field"));
-    }
-
     #[cfg(feature = "schemars")]
     #[test]
     fn demo_policy_schema_documents_exact_values_and_distinct_limits() {

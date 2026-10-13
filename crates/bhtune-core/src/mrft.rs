@@ -54,24 +54,6 @@ pub struct InitialReadings {
     pub mv_range_high: f32,
 }
 
-/// Legacy-bug replication flags, for bug-for-bug replay validation against captured legacy
-/// traces (see `docs/internal/design/correctness-register.md`). Every field defaults to
-/// `false`: the fixed, correct behavior. Set a field `true` only to intentionally reproduce
-/// that specific legacy defect, e.g. when asserting parity against a captured trace that has
-/// the bug baked in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MrftCompat {
-    /// Replicates `CheckMVboundaries`'s lower-clamp bug: clamps to `mv_range_low + mv_ini`
-    /// instead of the dimensionally-correct `mv_ini - mv_range_low`. Silently masked whenever
-    /// `mv_range_low == 0` (the common 0-100% case); only visibly wrong for cascaded loops
-    /// with a nonzero MV range floor.
-    pub replicate_lower_clamp_bug: bool,
-    /// Replicates the legacy extrema reset: after a switch, result measurement starts from
-    /// `pv_value_ini` instead of the switch sample. This can discard the shared switch endpoint
-    /// from the next half-cycle and produce a zero or biased PV amplitude when sampling is sparse.
-    pub replicate_extrema_reset_bug: bool,
-}
-
 /// Computes the raw engineering-unit relay amplitude from a percentage of the MV range, and
 /// clamps it so neither relay step would drive the MV outside `[mv_range_low,
 /// mv_range_high]`. Pure port of `CheckMVboundaries`.
@@ -80,18 +62,13 @@ pub fn clamp_relay_amplitude(
     mv_ini: f32,
     mv_range_low: f32,
     mv_range_high: f32,
-    compat: MrftCompat,
 ) -> f32 {
     let mut relay_amp_raw = relay_amp_percent / 100.0 * (mv_range_high - mv_range_low);
 
     if mv_ini + relay_amp_raw > mv_range_high {
         relay_amp_raw = mv_range_high - mv_ini;
     } else if mv_ini - relay_amp_raw < mv_range_low {
-        relay_amp_raw = if compat.replicate_lower_clamp_bug {
-            mv_range_low + mv_ini
-        } else {
-            mv_ini - mv_range_low
-        };
+        relay_amp_raw = mv_ini - mv_range_low;
     }
 
     relay_amp_raw
@@ -150,7 +127,6 @@ pub struct MrftEngine {
     troughs: Vec<f32>,
     switch_times: Vec<DateTime<Utc>>,
     completed: bool,
-    compat: MrftCompat,
 }
 
 impl MrftEngine {
@@ -172,7 +148,6 @@ impl MrftEngine {
         beta: f32,
         initial: InitialReadings,
         start_time: DateTime<Utc>,
-        compat: MrftCompat,
     ) -> MrftEngine {
         let action_multiplier = direction.action_multiplier();
 
@@ -181,7 +156,6 @@ impl MrftEngine {
             initial.mv_ini,
             initial.mv_range_low,
             initial.mv_range_high,
-            compat,
         );
 
         MrftEngine {
@@ -209,7 +183,6 @@ impl MrftEngine {
             troughs: Vec::new(),
             switch_times: Vec::new(),
             completed: false,
-            compat,
         }
     }
 
@@ -355,13 +328,8 @@ impl MrftEngine {
 
         self.max_pv_cycle = self.pv_value_ini;
         self.min_pv_cycle = self.pv_value_ini;
-        if self.compat.replicate_extrema_reset_bug {
-            self.max_pv_result = self.pv_value_ini;
-            self.min_pv_result = self.pv_value_ini;
-        } else {
-            self.max_pv_result = tick.pv;
-            self.min_pv_result = tick.pv;
-        }
+        self.max_pv_result = tick.pv;
+        self.min_pv_result = tick.pv;
 
         self.mv_value_current = if self.cycles_remaining() == 0 {
             self.mv_value_ini
@@ -420,98 +388,55 @@ mod tests {
 
         #[test]
         fn no_clamp_needed_when_within_range() {
-            let amp = clamp_relay_amplitude(10.0, 50.0, 0.0, 100.0, MrftCompat::default());
+            let amp = clamp_relay_amplitude(10.0, 50.0, 0.0, 100.0);
             assert_eq!(amp, 10.0); // 10% of (100-0)
         }
 
         #[test]
         fn unclamped_amplitude_uses_the_mv_span() {
-            let amp = clamp_relay_amplitude(10.0, 50.0, 20.0, 100.0, MrftCompat::default());
+            let amp = clamp_relay_amplitude(10.0, 50.0, 20.0, 100.0);
             assert_eq!(amp, 8.0); // 10% of (100-20)
         }
 
         #[test]
         fn upper_clamp_engages_near_ceiling() {
-            let amp = clamp_relay_amplitude(10.0, 95.0, 0.0, 100.0, MrftCompat::default());
+            let amp = clamp_relay_amplitude(10.0, 95.0, 0.0, 100.0);
             assert_eq!(amp, 5.0); // mv_range_high - mv_ini
         }
 
         #[test]
-        fn lower_clamp_uses_dimensionally_correct_formula_by_default() {
+        fn lower_clamp_uses_dimensionally_correct_formula() {
             // mv_ini=10, mv_range_low=5: naive 10% of (100-5) = 9.5 would drive MV to 0.5,
             // below the floor of 5, so it must clamp to mv_ini - mv_range_low = 5.
-            let amp = clamp_relay_amplitude(10.0, 10.0, 5.0, 100.0, MrftCompat::default());
+            let amp = clamp_relay_amplitude(10.0, 10.0, 5.0, 100.0);
             assert_eq!(amp, 5.0);
-        }
-
-        #[test]
-        fn lower_clamp_replicates_legacy_bug_when_compat_flag_set() {
-            let compat = MrftCompat {
-                replicate_lower_clamp_bug: true,
-                ..MrftCompat::default()
-            };
-            let amp = clamp_relay_amplitude(10.0, 10.0, 5.0, 100.0, compat);
-            assert_eq!(amp, 15.0); // legacy: mv_range_low + mv_ini
-        }
-
-        #[test]
-        fn fixed_and_buggy_formulas_agree_when_mv_range_low_is_zero() {
-            // This is exactly why the legacy bug went unnoticed: with the common 0-100%
-            // range, `mv_ini - 0` and `0 + mv_ini` are the same value.
-            let fixed = clamp_relay_amplitude(50.0, 10.0, 0.0, 100.0, MrftCompat::default());
-            let buggy = clamp_relay_amplitude(
-                50.0,
-                10.0,
-                0.0,
-                100.0,
-                MrftCompat {
-                    replicate_lower_clamp_bug: true,
-                    ..MrftCompat::default()
-                },
-            );
-            assert_eq!(fixed, buggy);
         }
 
         #[test]
         fn cascade_case_with_nonzero_floor() {
             // mv_ini=10, mv_msl=5, mv_msh=100: naive 10% of (100-5)=9.5 drives MV to 0.5,
             // below the floor, so the fixed clamp gives mv_ini - mv_range_low = 5.
-            let amp = clamp_relay_amplitude(10.0, 10.0, 5.0, 100.0, MrftCompat::default());
+            let amp = clamp_relay_amplitude(10.0, 10.0, 5.0, 100.0);
             assert_eq!(amp, 5.0);
         }
 
         #[test]
         fn lower_clamp_boundary_uses_subtraction() {
             let relay_amp_percent = 100.0 * 1.1 / 91.0;
-            let amp =
-                clamp_relay_amplitude(relay_amp_percent, 10.0, 9.0, 100.0, MrftCompat::default());
+            let amp = clamp_relay_amplitude(relay_amp_percent, 10.0, 9.0, 100.0);
             assert_eq!(amp, 1.0);
         }
     }
 
     #[test]
     fn action_multiplier_is_negative_one_for_direct() {
-        let engine = MrftEngine::new(
-            config(),
-            ControllerDirection::Direct,
-            0.0,
-            initial(),
-            t(0),
-            MrftCompat::default(),
-        );
+        let engine = MrftEngine::new(config(), ControllerDirection::Direct, 0.0, initial(), t(0));
         assert_eq!(engine.action_multiplier, -1);
     }
 
     #[test]
     fn action_multiplier_is_positive_one_for_reverse() {
-        let engine = MrftEngine::new(
-            config(),
-            ControllerDirection::Reverse,
-            0.0,
-            initial(),
-            t(0),
-            MrftCompat::default(),
-        );
+        let engine = MrftEngine::new(config(), ControllerDirection::Reverse, 0.0, initial(), t(0));
         assert_eq!(engine.action_multiplier, 1);
     }
 
@@ -521,14 +446,8 @@ mod tests {
     /// peak/trough/hysteresis interaction is easy to get subtly wrong by inspection alone.
     #[test]
     fn full_run_reverse_action_completes_with_expected_peaks_troughs_and_snap_back() {
-        let mut engine = MrftEngine::new(
-            config(),
-            ControllerDirection::Reverse,
-            0.3,
-            initial(),
-            t(0),
-            MrftCompat::default(),
-        );
+        let mut engine =
+            MrftEngine::new(config(), ControllerDirection::Reverse, 0.3, initial(), t(0));
 
         let actions = engine.step(Tick {
             time: t(1),
@@ -597,51 +516,9 @@ mod tests {
     }
 
     #[test]
-    fn extrema_compatibility_flag_reproduces_the_legacy_reset() {
-        let mut engine = MrftEngine::new(
-            config(),
-            ControllerDirection::Reverse,
-            0.3,
-            initial(),
-            t(0),
-            MrftCompat {
-                replicate_extrema_reset_bug: true,
-                ..MrftCompat::default()
-            },
-        );
-
-        let mut last_actions = Vec::new();
-        for (i, pv) in [55.0, 45.0, 55.0].into_iter().enumerate() {
-            last_actions = engine.step(Tick {
-                time: t(i as i64 + 1),
-                pv,
-            });
-        }
-
-        assert_eq!(
-            last_actions,
-            vec![
-                Action::WriteMv(50.0),
-                Action::Complete {
-                    peaks: vec![50.0],
-                    troughs: vec![50.0, 50.0],
-                    switch_times: vec![t(1), t(2), t(3)],
-                    mv_sign_init: -1,
-                },
-            ]
-        );
-    }
-
-    #[test]
     fn direct_action_mirrors_reverse_with_peaks_and_troughs_swapped() {
-        let mut engine = MrftEngine::new(
-            config(),
-            ControllerDirection::Direct,
-            0.0,
-            initial(),
-            t(0),
-            MrftCompat::default(),
-        );
+        let mut engine =
+            MrftEngine::new(config(), ControllerDirection::Direct, 0.0, initial(), t(0));
 
         let mut last_actions = Vec::new();
         for (i, pv) in [40.0, 60.0, 40.0].into_iter().enumerate() {
@@ -708,14 +585,8 @@ mod tests {
             (20000, 1.89),
             (21000, 1.80),
         ];
-        let mut engine = MrftEngine::new(
-            config,
-            ControllerDirection::Reverse,
-            beta,
-            initial,
-            t_ms(0),
-            MrftCompat::default(),
-        );
+        let mut engine =
+            MrftEngine::new(config, ControllerDirection::Reverse, beta, initial, t_ms(0));
 
         let completion = samples.iter().find_map(|(offset_ms, pv)| {
             engine
@@ -785,14 +656,8 @@ mod tests {
             (25990, 186.82),
             (27989, 203.86),
         ];
-        let mut engine = MrftEngine::new(
-            config,
-            ControllerDirection::Reverse,
-            beta,
-            initial,
-            t_ms(0),
-            MrftCompat::default(),
-        );
+        let mut engine =
+            MrftEngine::new(config, ControllerDirection::Reverse, beta, initial, t_ms(0));
 
         let completion = samples.iter().find_map(|(offset_ms, pv)| {
             engine
@@ -822,14 +687,8 @@ mod tests {
 
     #[test]
     fn direct_action_hysteresis_uses_previous_sign_and_subtracts() {
-        let mut engine = MrftEngine::new(
-            config(),
-            ControllerDirection::Direct,
-            0.3,
-            initial(),
-            t(0),
-            MrftCompat::default(),
-        );
+        let mut engine =
+            MrftEngine::new(config(), ControllerDirection::Direct, 0.3, initial(), t(0));
 
         assert_eq!(
             engine.step(Tick {
@@ -875,7 +734,6 @@ mod tests {
             0.3,
             initial(),
             t(0),
-            MrftCompat::default(),
         );
 
         assert_eq!(
@@ -918,14 +776,8 @@ mod tests {
             num_cycles_count: 1,
             ..config()
         };
-        let mut engine = MrftEngine::new(
-            config,
-            ControllerDirection::Reverse,
-            0.0,
-            initial(),
-            t(0),
-            MrftCompat::default(),
-        );
+        let mut engine =
+            MrftEngine::new(config, ControllerDirection::Reverse, 0.0, initial(), t(0));
 
         let mut last_actions = Vec::new();
         for (i, pv) in [60.0, 40.0, 60.0, 40.0, 60.0].into_iter().enumerate() {
@@ -959,14 +811,8 @@ mod tests {
             noise_protection_secs: 5,
             ..config()
         };
-        let mut engine = MrftEngine::new(
-            config,
-            ControllerDirection::Reverse,
-            0.0,
-            initial(),
-            t(0),
-            MrftCompat::default(),
-        );
+        let mut engine =
+            MrftEngine::new(config, ControllerDirection::Reverse, 0.0, initial(), t(0));
 
         let actions = engine.step(Tick {
             time: t(1),
@@ -995,14 +841,8 @@ mod tests {
 
     #[test]
     fn step_after_completion_is_a_no_op() {
-        let mut engine = MrftEngine::new(
-            config(),
-            ControllerDirection::Reverse,
-            0.3,
-            initial(),
-            t(0),
-            MrftCompat::default(),
-        );
+        let mut engine =
+            MrftEngine::new(config(), ControllerDirection::Reverse, 0.3, initial(), t(0));
 
         for (i, pv) in [55.0, 45.0, 55.0].into_iter().enumerate() {
             engine.step(Tick {

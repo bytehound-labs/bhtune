@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use bhtune_core::{
     Action, ControllerDirection, DcsTemplate, LoopConfig, LoopTags, MrftEngine, MrftState, PvRange,
-    Tick, TuningMathCompat, calculate_all_checked,
+    Tick, calculate_all_checked,
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{MvActuationKind, SampleQuality, TuneResultRow, TuneSampleRow};
@@ -636,7 +636,6 @@ pub(super) async fn persist_results(
         config,
         pv_range,
         template,
-        TuningMathCompat::default(),
     );
 
     let mut previews = Vec::with_capacity(results.len());

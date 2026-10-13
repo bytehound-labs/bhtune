@@ -562,10 +562,12 @@ pub(crate) async fn build_run_detail(
         restore_status: run.restore_status,
         restore_detail: run.restore_detail,
         original_request: parse_stored_request(run.id, &run.request_json),
-        gateway_compatibility: run.gateway_compatibility_json.as_deref().and_then(|json| {
-            bhtune_runtime::gateway::parse_stored_compatibility(json)
-                .map(crate::routes::opc::GatewayCompatibilityResponse::from)
-        }),
+        gateway_compatibility: run
+            .gateway_compatibility_json
+            .as_deref()
+            .map(bhtune_runtime::gateway::parse_stored_compatibility)
+            .transpose()?
+            .map(crate::routes::opc::GatewayCompatibilityResponse::from),
     }))
 }
 
@@ -1490,7 +1492,6 @@ mod tests {
             "mv_range_high": 100.0,
             "mv_range_low": 0.0,
             "direction": "reverse",
-            "poll_interval_ms": 5,
             "notes": "http-test-loop",
         });
         let request: StartRunRequest = serde_json::from_value(value).unwrap();

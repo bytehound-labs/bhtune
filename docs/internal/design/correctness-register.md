@@ -6,13 +6,9 @@ the [design notes index](README.md) for provenance.
 ## Correctness-critical design details (also the legacy bug register, `core-bug-register`)
 
 These are easy to get subtly wrong, so they're called out explicitly. Each should have direct
-unit-test coverage, not just be caught incidentally by a golden-master replay fixture. This list
+unit-test coverage, not just be caught incidentally by a golden-master replay fixture. this list
 also **is** `core-bug-register`'s deliverable: every legacy defect found during the migration is
-covered somewhere below with an explicit replicate-or-fix decision, tagged with one of:
-
-- **`[fixed, compat flag available]`** — the correct behavior ships by default; the old, buggy
-  behavior can still be reproduced on demand via a `*Compat` struct field, for bug-for-bug replay
-  against a legacy trace if one is ever needed.
+covered somewhere below with an explicit fix decision, tagged with one of:
 - **`[fixed, no flag needed]`** — the correct behavior ships and the bug has no legitimate reason
   to ever be reproduced (it was pure defect, never a documented or relied-upon behavior).
 - **`[structurally impossible]`** — stronger than "fixed": the bug's precondition cannot occur in
@@ -28,38 +24,28 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
 - **`[research-only]`** — an unshipped alternative evaluated outside production behavior, requiring
   stronger closed-loop or live evidence before it can be considered for release.
 
-1. **`[fixed, compat flag available]` The MV boundary clamp must be dimensionally consistent on
+1. **`[fixed, no flag needed]` The MV boundary clamp must be dimensionally consistent on
    both sides.** If the relay step
    down would drive MV below its configured floor, clamp the relay amplitude to
    `MvValueIni - MvLowerRange` (the actual distance from the initial value down to the floor), not
    an expression that adds the floor back onto the initial value. Get this wrong and cascaded
    loops with a non-zero MV floor get an incorrect (usually oversized) relay amplitude — it's
    silently masked whenever the floor is 0 (the common 0–100% case), which makes it easy to miss
-   in testing. Legacy: `CheckMVboundaries`, `OPCClass.cs` ~line 355. Fixed by default in
-   `core-mrft`; replicable via `MrftCompat.replicate_lower_clamp_bug`.
-2. **`[fixed, compat flag available]` The MRFT oscillation period must use full-precision elapsed
-   time** (total seconds as a
-   floating-point value), never truncated into separate hour/minute/second integer components and
-   reassembled — that discards sub-second precision and wraps incorrectly past 24 hours. This
-   matters most on fast loops (flow/pressure) where the whole oscillation period is only a few
-   seconds, so truncation error is a large fraction of the signal, not noise. Legacy:
-   `CalculatedMRFTperiodMinutes`, `OPCClass.cs` ~line 743 (uses `TimeSpan.Seconds`, an
-   integer-truncating property, instead of `.TotalSeconds`). Fixed by default in
-   `core-tuning-math`; replicable via `TuningMathCompat.replicate_period_truncation_bug`.
-   **Cautionary note:** `core-tuning-math`'s first implementation stated this rule correctly but
-   didn't actually follow it — `measure_oscillation` computed elapsed time via
-   `chrono::Duration::num_seconds()` (whole-second-truncating) _unconditionally_, with
-   `TuningMathCompat.replicate_period_truncation_bug` only gating an additional 24-hour wrap on
-   top of the already-truncated value. Every existing unit test used whole-second switch-time
-   offsets, so this was lossless in every test and went unnoticed until `e2e-simulator`'s real,
-   fixed millisecond-spaced simulator ticks through the production subprocess path hit it directly, silently zeroing `ti_minutes`/
-   `td_minutes` even for PI/PID. Fixed by switching to `num_milliseconds()` for the default path;
-   see the `measure_oscillation_keeps_sub_second_precision_by_default` regression test in
-   `tuning_math.rs` and `e2e_simulator.rs`'s module doc for the full story. The lesson: writing
-   the rule down is not sufficient on its own — it needs test coverage with genuinely
-   sub-second-precision inputs, not just whole-second ones, to actually enforce it. Separately,
-   `core-replay-harness`'s `flow_pi_direct` fixture needed its own dedicated, narrower
-   `PERIOD_TOLERANCE_MINUTES` for exactly this reason — see "Validation strategy" above.
+   in testing. Legacy: `CheckMVboundaries`, `OPCClass.cs` ~line 355. `core-mrft` uses the
+   dimensionally correct clamp.
+2. **`[fixed, no flag needed]` The MRFT oscillation period must use full-precision elapsed time**
+   (total seconds as a floating-point value), never truncated into separate hour/minute/second
+   integer components and reassembled — that discards sub-second precision and wraps incorrectly
+   past 24 hours. This matters most on fast loops (flow/pressure) where the whole oscillation
+   period is only a few seconds, so truncation error is a large fraction of the signal, not noise.
+   Legacy: `CalculatedMRFTperiodMinutes`, `OPCClass.cs` ~line 743 (uses `TimeSpan.Seconds`, an
+   integer-truncating property, instead of `.TotalSeconds`). `measure_oscillation` uses
+   `num_milliseconds()` so sub-second periods remain measurable and long runs do not wrap. An
+   earlier `num_seconds()` implementation escaped unit tests that used whole-second switch times;
+   focused sub-second and 24-hour regression cases, plus the production simulator subprocess
+   test, now exercise the fixed behavior. The `flow_pi_direct` golden fixture still needs its
+   dedicated, narrower `PERIOD_TOLERANCE_MINUTES` because its recorded timestamps have only
+   whole-second precision — see "Validation strategy" above.
 3. **`[structurally impossible]` Switch timestamps must reuse the already-captured tick
    timestamp**, never a fresh wall-clock
    read at the moment a switch is performed — the two can differ by however long evaluation took,
@@ -223,16 +209,15 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     template rather than the mutable catalog; it intentionally keeps all three template-specific
     columns visible for P, PI, and PID, and PI runs display derivative `0` because the write path
     explicitly clears stale derivative action.
-21. **`[fixed, compat flag available]` Measurement extrema must not be conflated with hysteresis
+21. **`[fixed, no flag needed]` Measurement extrema must not be conflated with hysteresis
     extrema.** The legacy reset of both trackers to `pv_value_ini` after a switch can discard the
     shared switch endpoint from the next measured half-cycle when polling is sparse, producing a
     zero or biased PV amplitude even though the relay state machine itself is behaving
     consistently. Production `MrftEngine` therefore keeps separate result extrema, includes the
     switch sample in the new measurement interval, and leaves the hysteresis trackers on the
-    legacy reset so switching behavior is unchanged. `MrftCompat::replicate_extrema_reset_bug`
-    is available only for parity experiments. Variant B — changing the hysteresis reset too — is
-    `[research-only]` and must be evaluated with a closed-loop simulator rather than a recorded
-    trace.
+    legacy reset so switching behavior is unchanged. Variant B — changing the hysteresis reset
+    too — is `[research-only]` and must be evaluated with a closed-loop simulator rather than a
+    recorded trace.
 22. **`[fixed, no flag needed]` Degenerate calculated results must never become writable PID
     constants.** A zero/negative/non-finite PV amplitude or period, a non-finite tuning
     intermediate, or a non-finite template-converted P/I/D value produces an explicitly invalid
