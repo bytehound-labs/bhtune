@@ -37,6 +37,10 @@ supported installs. See the [installation guide](docs/getting-started/installati
 source-build instructions, supported distribution details, Windows installer diagnostics, and
 recovery.
 
+Release packaging includes platform archives, Debian/RPM packages, AUR, Docker, and the Windows
+installer. macOS packaging includes a launchd job and a Homebrew formula template that requires
+a tap and verified stable-release checksums before installation.
+
 The Windows distribution uses an NSIS installer for the CLI and web server, with an optional
 verified OPC DA gateway component. Installer validation covers external SQLite databases and
 WAL-preserving rollback fixtures under the service account.

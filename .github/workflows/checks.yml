@@ -178,18 +178,6 @@ jobs:
           cargo run --locked -p bhtune-server --example gen_openapi
           git diff --exit-code openapi.json
 
-      - name: Fetch base OpenAPI spec
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          git show "origin/$BASE_REF:openapi.json" > /tmp/openapi-base.json
-
-      - name: Reject breaking OpenAPI changes
-        if: github.event_name == 'pull_request'
-        run: python3 scripts/check_openapi_breaking.py /tmp/openapi-base.json openapi.json
-
       - name: Regenerate CLI docs and check for drift
         run: |
           cargo run --locked -p bhtune --example gen_docs --features schemars

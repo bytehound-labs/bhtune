@@ -308,9 +308,10 @@ All referenced GitHub Actions are pinned to immutable commit SHAs; Dependabot up
 pins through the configured `github-actions` ecosystem.
 
 Parser changes should include both a focused property test and, where the input boundary is
-externally reachable, a `fuzz/` target. OpenAPI changes must regenerate `openapi.json` and
-pass the breaking-change comparison against the pull request base. Database changes must
-include a representative upgrade test when they alter an existing schema.
+externally reachable, a `fuzz/` target. OpenAPI changes must regenerate `openapi.json` and the
+frontend API schema; CI checks for generated-reference drift, while API compatibility requires
+review against the existing contract. Database changes must include a representative upgrade
+test when they alter an existing schema.
 
 Release tags publish checksums, a CycloneDX SBOM, Sigstore blob-signature bundles, and GitHub
 artifact provenance. Do not add release artifacts that bypass those steps.

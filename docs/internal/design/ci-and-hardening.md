@@ -63,7 +63,7 @@ Pulled into `bhtune` from `opcda-bridge`'s example:
   The original package job still surfaced a real bug before this distinction mattered —
   every workspace-internal path dependency lacked a `version` requirement, which `cargo
 package` refuses even to assemble. Giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
-`bhtune` `{ path, version }` entries in `[workspace.dependencies]` and switching every
+  `bhtune` `{ path, version }` entries in `[workspace.dependencies]` and switching every
   consumer to `.workspace = true` remains required.
 - **`concurrency` groups, `permissions: contents: read`, and `--locked` everywhere** across
   `checks.yml`/`coverage.yml`/`e2e.yml`.
@@ -135,15 +135,11 @@ The repository now has a layered hardening gate for both source changes and rele
   JSON, OPC bridge payload mappings, and template imports. The separate `fuzz/` Cargo-fuzz
   package has targets for each of those byte-stream boundaries without becoming a workspace
   runtime dependency.
-- **API compatibility.** `scripts/check_openapi_breaking.py` is a dependency-free comparison
-  for removed operations/responses/properties/enum values, newly required request fields, and
-  newly mandatory authentication. Its unit tests run in CI, and pull requests compare the
-  generated revision to the base branch in addition to the existing drift check. The only
-  response nullability allowance is the exact pre-v1 checked-result migration for the six
-  numeric fields of `ResultResponse`, because invalid calculations persist no safe numeric
-  value; unrelated response changes remain breaking. The request-property removals allowed by
-  the comparator are exact pre-v1 migrations of the per-tune quality/timing settings into global
-  configuration; unrelated removals remain breaking.
+- **Generated API contract.** CI regenerates `openapi.json` and checks it for drift; the frontend
+  API schema is generated from that contract and checked separately. HTTP contract changes must
+  update both generated references. CI does not compare a pull request's OpenAPI changes against
+  the base revision for breaking changes, so compatibility requires review against the existing
+  contract.
 - **Database compatibility.** Before v0.1, the migrations directory contains one consolidated
   `0001_initial_schema.sql` describing the complete current schema. Fresh-schema tests verify
   the single recorded migration plus the final indexes, checked-result constraints, Demo
