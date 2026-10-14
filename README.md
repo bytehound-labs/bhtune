@@ -30,8 +30,11 @@ engine follows one corrected calculation path, without legacy bug-emulation mode
 
 ## Screenshots
 
-The [Web UI visual reference](docs/guides/web-ui/overview.md) includes screenshots of the Full
-and Demo workflows.
+The [Web UI visual reference](docs/guides/web-ui/overview.md) includes dynamically generated
+screenshots of the Full and Demo workflows. This completed Full-mode run shows calculated PID
+results and the PV/commanded-MV trend.
+
+[![Completed BHTune Full-mode run detail with calculated PID results and a PV/commanded-MV trend](https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=a459523a7bbb)](https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=a459523a7bbb)
 
 ## Installation
 
