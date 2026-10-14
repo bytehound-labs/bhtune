@@ -580,23 +580,33 @@ async fn assert_tune(harness: &Harness, summary: &Value, pv: &str) -> [f32; 3] {
     assert_eq!(restore.target_mv, 50.0);
     for (index, actuation) in actuations.iter().enumerate() {
         if actuation.status == MvActuationStatus::Superseded {
-            assert_eq!(
-                index + 2,
-                actuations.len(),
-                "only final snapback may be superseded"
-            );
             assert_eq!(actuation.kind, MvActuationKind::Relay);
             assert_eq!(actuation.target_mv, 50.0);
+            if index + 1 < actuations.len() {
+                assert_eq!(
+                    index + 2,
+                    actuations.len(),
+                    "only final snapback may be superseded"
+                );
+                assert_eq!(restore.kind, MvActuationKind::Restore);
+                continue;
+            }
+            assert!(
+                actuation
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("adopted and confirmed"))
+            );
         } else {
             assert_eq!(
                 actuation.status,
                 MvActuationStatus::Confirmed,
                 "{actuation:?}"
             );
-            assert_eq!(actuation.readback_quality, Some(SampleQuality::Good));
-            near(actuation.readback_mv.unwrap(), actuation.target_mv);
-            assert!(actuation.last_checked_at.unwrap() <= actuation.confirmation_due_at);
         }
+        assert_eq!(actuation.readback_quality, Some(SampleQuality::Good));
+        near(actuation.readback_mv.unwrap(), actuation.target_mv);
+        assert!(actuation.last_checked_at.unwrap() <= actuation.confirmation_due_at);
     }
     let results = TuneResultRow::list_for_run(&pool, id).await.unwrap();
     assert_eq!(results.len(), 3);

@@ -126,7 +126,7 @@ data without a plant connection. References include the [CLI](docs/reference/cli
 Windows validation runs the real CLI through a checksum- and provenance-verified official
 gateway and an isolated synthetic OPC DA COM fixture. It checks read-only preflight, paged
 browsing, one manual namespace index, and a Yokogawa-template MRFT with verified Moderate PID
-write-back and restoration. Product crates remain COM-free.
+write-back and confirmed MV/mode/setpoint restoration. Product crates remain COM-free.
 
 Preflight requires OPC discovery. The runner preserves existing OPCEnum registration or
 supplies a synthetic catalog shim from the fixture DLL when it is absent. The test client uses

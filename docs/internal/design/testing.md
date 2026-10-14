@@ -100,6 +100,10 @@ P/I/D unit conversion and one-decimal targets, and verifies native write-back, a
 restoration, history, and the fixture audit. Live timing uses invariant/readback assertions,
 not scheduler-sensitive numeric goldens.
 
+A final relay audit row can be superseded when restoration adopts its confirmed snapback
+without a duplicate MV write. This handoff still requires Good matching readback before the
+confirmation deadline, a confirmed restore outcome, and the independent final native read.
+
 The runner uses isolated state, an unused high port, collision-checked explicit 32-bit COM
 registration, finite native process-tree deadlines, and ownership-verified cleanup. Gateway
 archives, executable hashes, PE identity, version, signed checksums, and release provenance
@@ -112,8 +116,8 @@ protection is an owned inbound-block rule for the exact staged gateway executabl
 in effective policy and removed after the owned processes stop. Verification recognizes
 NetSecurity's `Enforced` and `ProfileInactive` labels as well as their MOF/raw CIM equivalents;
 at least one profile must enforce the rule, and no disabled or unresolved status is accepted.
-Local runs require enabled
-firewall profiles and permissions to create/remove that rule independently of COM scope.
+Local runs require enabled firewall profiles and permissions to create/remove that rule
+independently of COM scope.
 Disabled firewall profiles are tolerated only on disposable GitHub-hosted plant-free VMs,
 with that boundary recorded rather than global policy changed.
 
