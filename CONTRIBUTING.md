@@ -141,7 +141,9 @@ retains its staged-file inputs and generated-file exclusions.
 The root `Cargo.toml` defines one workspace-wide lint policy in `[workspace.lints]`. Every member
 crate opts in with `[lints] workspace = true`, so libraries, binaries, tests, examples, and build
 scripts share the same baseline. The standalone `fuzz/` package is a separate Cargo workspace and
-is not covered. Code behind `#[cfg(windows)]` is linted by the Windows CI job.
+is not covered. The test-only `tests/opcda-yokogawa-fixture/` workspace has explicit Windows
+formatting, Clippy, focused tests, and dependency/license gates. Code behind `#[cfg(windows)]`
+is linted by the Windows CI job.
 
 - `deny` marks constructs that must never land and is an error even without `-D warnings`:
   `unsafe_code`, which every `rustc` build checks, and these lints, which `cargo clippy`
@@ -183,8 +185,9 @@ is not covered. Code behind `#[cfg(windows)]` is linted by the Windows CI job.
 
 ## Dependency updates
 
-Dependabot checks the Cargo workspace, pnpm workspace, and GitHub Actions weekly, grouping routine
-patch and minor updates within each ecosystem. Major updates are intentionally left as focused,
+Dependabot checks the product and native-fixture Cargo workspaces, pnpm workspace, and GitHub
+Actions weekly, grouping routine patch and minor updates within each ecosystem. Major updates
+are intentionally left as focused,
 individual PRs. Routine updates should use the grouped PRs and update the relevant manifest and
 lockfile together; use the latest compatible version rather than blindly accepting a major release
 that breaks the current toolchain or code-generation stack.
@@ -238,6 +241,63 @@ and validation rules rather than treating "latest" as an unconditional upgrade p
   `pnpm --filter bhtune-frontend run test:e2e` without `PLAYWRIGHT_MODE` runs both projects and
   starts both isolated test servers.
 
+### Windows native OPC DA smoke
+
+The serial native smoke uses the real CLI and the official x86 gateway pinned in
+`installer/windows/opcda-gateway-release.json`. Its unpublished COM DLL exposes only the
+synthetic `ByteHound.BHTuneOpcDaSmoke.1` server. It covers read-only `check` without creating a
+database, native paged browse and session closure, one manual index and exact indexed searches,
+then one Yokogawa-template temperature/PID tune, Moderate write-back, and restoration.
+CLI and Web share the native driver backend; React rendering remains covered by Playwright.
+Preflight needs `OPC.ServerList.1`: the runner preserves an existing OPCEnum, or registers a
+test-only `IOPCServerList`/`IEnumGUID` catalog from the same fixture DLL when neither registry
+hive has that ProgID. The catalog reports only the synthetic DA2 class. The server's owned
+CLSID includes its OPC DA 2.0 category for discovery by a real OPCEnum. This bootstrap does not
+validate real OPCEnum, actual CENTUM firmware, remote DCOM, or site permissions.
+
+Use PowerShell 7.4 or later on a disposable, plant-free Windows test host. Install Rustup,
+Visual C++ x86 build tools, `protoc`, GitHub CLI, Cosign, and `cargo-deny`; public release
+verification needs no private credentials. The fixture requires the explicit MSVC toolchain
+below; the ordinary BHTune toolchain, including the GNU toolchain on `win`, is unchanged.
+
+COM registration defaults to `User`, requiring a non-elevated shell with UAC enabled.
+Creating/removing the scoped firewall rule independently requires local administrator
+permissions. For local reproduction, explicitly select `Machine` from an administrator shell
+on the disposable host as below; the runner never elevates or falls back automatically.
+An existing real OPCEnum also requires machine-scoped fixture categories because it may not
+see HKCU classes. Real discovery registrations are never replaced or removed.
+
+```powershell
+rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt --component clippy --target i686-pc-windows-msvc
+cargo +stable-x86_64-pc-windows-msvc fmt --manifest-path tests/opcda-yokogawa-fixture/Cargo.toml --all --check
+cargo +stable-x86_64-pc-windows-msvc clippy --manifest-path tests/opcda-yokogawa-fixture/Cargo.toml --target i686-pc-windows-msvc --target-dir target/opcda-yokogawa-fixture --all-targets --all-features --locked -- -D warnings
+cargo +stable-x86_64-pc-windows-msvc test --manifest-path tests/opcda-yokogawa-fixture/Cargo.toml --target i686-pc-windows-msvc --target-dir target/opcda-yokogawa-fixture --locked -- --test-threads=1
+cargo deny --manifest-path tests/opcda-yokogawa-fixture/Cargo.toml --target i686-pc-windows-msvc --locked --config deny.toml check
+pwsh -NoProfile -File scripts/test-opcda-yokogawa.ps1 -RegistrationScope Machine -ArtifactsDirectory target/opcda-yokogawa-smoke
+```
+
+The runner first runs the four standalone tests serially (two model and two native COM
+vtable/state/enumerator checks), then builds the DLL. It refuses collisions in either 32-bit
+COM registry hive, registers
+only its owned fixture keys, and starts an owned foreground gateway on an unused high port.
+The client endpoint is loopback; the pinned gateway binds a wildcard listener. With the
+firewall enabled, the runner creates and verifies one inbound-block rule for the exact staged
+gateway executable, then removes only that owned rule after stopping the processes.
+Local reproduction fails if every firewall profile is not enabled or that protection cannot
+be established. Disposable GitHub-hosted CI may use its plant-free VM boundary when firewall
+profiles are disabled; evidence records that fact without enabling them. Port `7600`,
+services, installed gateways, production namespaces, and global firewall/UAC/DCOM policy
+are untouched.
+
+Native process trees have finite deadlines and Windows job-object cleanup. The runner restores
+its environment and verifies ownership before removing COM keys, the firewall rule, and
+scratch state in `finally`.
+Evidence in unique `run-*` directories contains source/toolchain/hash/PID metadata, bounded
+logs, phase outputs, the write audit, and database snapshots taken after the owned processes
+stop, plus the discovery provider and firewall boundary. CI uploads that evidence on failure.
+Ordinary `cargo test --workspace` leaves the native integration test ignored; root coverage
+still requires 100% of canonical product-source lines.
+
 ## CI
 
 Rust PRs must pass `cargo fmt --check --all`,
@@ -263,6 +323,11 @@ touching `docs/` or `website/` must pass `pnpm --filter bhtune-website run forma
 check across `docs/`, since Docusaurus fails the build rather than shipping a dead link or
 a heading reference that no longer exists. Knip runs as the required `Knip dead-code analysis`
 status for changes affecting the pnpm workspaces, their dependency metadata, or its configuration.
+
+The existing required Windows validation job also runs the standalone native fixture gates and
+the native OPC DA smoke. Fixture, runner, and gateway-contract/validator changes trigger that
+job; it is not an optional check.
+
 SonarQube runs as a separate `Required Sonar quality status` check for relevant changes; its
 quality-gate result is blocking when analysis runs, while documentation-only and fork pull
 requests receive an explicit successful skip status. Applicable PR analyses must also report zero

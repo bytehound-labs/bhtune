@@ -121,6 +121,29 @@ data without a plant connection. References include the [CLI](docs/reference/cli
 [troubleshooting](docs/guides/troubleshooting.md), [glossary](docs/reference/glossary.md),
 [release guide](docs/guides/releasing.md), and [roadmap](docs/roadmap.md).
 
+## Plant-free native OPC DA validation
+
+Windows validation runs the real CLI through a checksum- and provenance-verified official
+gateway and an isolated synthetic OPC DA COM fixture. It checks read-only preflight, paged
+browsing, one manual namespace index, and a Yokogawa-template MRFT with verified Moderate PID
+write-back and confirmed MV/mode/setpoint restoration. Product crates remain COM-free.
+
+Preflight requires OPC discovery. The runner preserves existing OPCEnum registration or
+supplies a synthetic catalog shim from the fixture DLL when it is absent. The test client uses
+loopback and an unused high port; the official gateway's wildcard listener is protected by an
+owned executable firewall block or the disposable hosted-CI boundary. Firewall verification
+requires enforcement on an active profile, not merely an enabled rule.
+Cleanup removes the owned firewall rule even if setup fails before COM registration;
+an unresolved process-stop failure retains that protection.
+Native startup failures identify the failed Windows API and its error code; empty failure
+state remains exportable as evidence. Tool selection follows PATH order; evidence records the
+effective firewall rule properties before gateway startup.
+Mocked runner checks need no native tool execution, COM registration, or firewall changes.
+
+See [Windows native OPC DA smoke](CONTRIBUTING.md#windows-native-opc-da-smoke) for reproduction.
+This test does not establish compatibility with CENTUM firmware, a site's namespace, remote
+DCOM, or controller write permissions, and does not exercise the browser UI.
+
 ## License
 
 BHTune is licensed under [AGPL-3.0-or-later](LICENSE). Contributors should read and sign the [Contributor License Agreement](CLA.md).

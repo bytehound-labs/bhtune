@@ -54,6 +54,11 @@ jobs:
               - 'crates/**/build.rs'
               - 'crates/**/Cargo.toml'
               - 'crates/**/proto/**'
+              - 'tests/opcda-yokogawa-fixture/**'
+              - 'installer/windows/opcda-gateway-release.json'
+              - 'installer/windows/BhtuneInstaller.psm1'
+              - 'installer/windows/Private/**'
+              - 'installer/windows/third-party/opcda-bridge/**'
             frontend:
               - 'Cargo.toml'
               - 'Cargo.lock'
@@ -226,6 +231,56 @@ jobs:
         run: |
           cargo run --locked -p bhtune --example gen_docs --features schemars
           git diff --exit-code -- docs/reference/ man/ completions/
+
+      - name: Check native OPC DA smoke runner
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE 'scripts/test-opcda-yokogawa.ps1'),
+            [ref]$tokens, [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            throw "PowerShell parser rejected the native smoke runner: $($errors | Out-String)"
+          }
+          ./scripts/test-opcda-yokogawa-cleanup.Tests.ps1
+          ./scripts/test-opcda-yokogawa-process.Tests.ps1
+
+      - name: Install standalone fixture x86 MSVC toolchain
+        run: rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt --component clippy --target i686-pc-windows-msvc
+
+      - name: Check standalone fixture formatting
+        run: cargo +stable-x86_64-pc-windows-msvc fmt --manifest-path tests/opcda-yokogawa-fixture/Cargo.toml --all --check
+
+      - name: Lint standalone fixture with clippy
+        run: cargo +stable-x86_64-pc-windows-msvc clippy --manifest-path tests/opcda-yokogawa-fixture/Cargo.toml --target i686-pc-windows-msvc --target-dir target/opcda-yokogawa-fixture --all-targets --all-features --locked -- -D warnings
+
+      - name: Run focused standalone fixture tests
+        run: cargo +stable-x86_64-pc-windows-msvc test --manifest-path tests/opcda-yokogawa-fixture/Cargo.toml --target i686-pc-windows-msvc --target-dir target/opcda-yokogawa-fixture --locked -- --test-threads=1
+
+      - name: Check standalone fixture dependencies and licenses
+        run: cargo deny --manifest-path tests/opcda-yokogawa-fixture/Cargo.toml --target i686-pc-windows-msvc --locked --config deny.toml check
+
+      - name: Install Cosign for gateway verification
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac
+
+      - name: Run native OPC DA Yokogawa CLI smoke
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Machine scope is explicit on this disposable host. The runner preserves real OPCEnum
+        # and records either its owned firewall block or the disabled-firewall VM boundary.
+        run: ./scripts/test-opcda-yokogawa.ps1 -RegistrationScope Machine -ArtifactsDirectory target/opcda-yokogawa-smoke
+
+      - name: Upload native OPC DA smoke failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: opcda-yokogawa-smoke-evidence
+          path: target/opcda-yokogawa-smoke/run-*/
+          if-no-files-found: ignore
+          retention-days: 7
 
   package:
     name: Package verification

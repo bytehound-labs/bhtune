@@ -15,6 +15,35 @@ passes intentional documentation-only skips and fork pull-request skips while fa
 applicable analysis or the Sonar quality gate fails. The two projects use separate Sonar
 configurations because `opcda-bridge` is Rust-only.
 
+## Native OPC DA validation
+
+`checks.yml` includes the plant-free [native Windows smoke](testing.md#native-windows-opc-da-smoke)
+in its existing required Windows validation job. Change detection includes the standalone
+fixture/lockfile, runner, and installer gateway-contract/validator surfaces. The fixture has
+explicit x86 MSVC formatting, Clippy with `-D warnings`, focused tests, and `cargo-deny`
+dependency/license checks; Dependabot tracks its separate Cargo workspace.
+
+The runner verifies the pinned official gateway's source tag, workflow blob, signed archive
+and checksums, provenance, executable hash, PE identity, and version before use. Disposable
+hosted Windows CI explicitly selects machine-scope 32-bit fixture registration; User is the
+default, with explicit Machine scope available on disposable local reproduction hosts.
+Existing OPCEnum is preserved. A fixture-only catalog shim supplies required preflight
+discovery only when `OPC.ServerList.1` is absent from both hives; evidence records the provider.
+
+The gateway listener is wildcard; clients use loopback. Enabled firewall profiles receive
+one owned inbound-block rule for the exact staged executable, verified in active policy and
+removed after process cleanup. Local runs fail without that protection and require separate
+administrator permissions for firewall-rule creation/removal. Disabled firewall profiles may
+use only the disposable hosted-CI plant-free boundary, recorded in evidence. Global firewall,
+UAC/DCOM policy, existing registrations, and services are untouched. Owned job objects bound
+and reap native process trees, and `finally` verifies COM/firewall ownership before cleanup.
+Pinned artifact upload retains bounded failure evidence and stopped-process database snapshots
+without gateway binaries or arbitrary user directories.
+
+The job remains blocking through `Required validation status`. Read-only permissions, pinned
+actions, required status names, ordinary PR events, and the existing job timeout are preserved;
+there are no new secrets, optional matrices, or coverage/license/lint/Sonar exceptions.
+
 ## Knip dead-code analysis (`knip`)
 
 Knip runs full analysis across the root pnpm workspace, `frontend/`, and `website/` through the
