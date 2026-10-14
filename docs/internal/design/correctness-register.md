@@ -46,18 +46,18 @@ covered somewhere below with an explicit fix decision, tagged with one of:
    focused sub-second and 24-hour regression cases, plus the production simulator subprocess
    test, now exercise the fixed behavior. The `flow_pi_direct` golden fixture still needs its
    dedicated, narrower `PERIOD_TOLERANCE_MINUTES` because its recorded timestamps have only
-   whole-second precision — see "Validation strategy" above.
-3. **`[structurally impossible]` Switch timestamps must reuse the already-captured tick
+   whole-second precision — see [golden replay validation](validation-golden-replay.md).
+3. **`[fixed, no flag needed]` Switch timestamps must reuse the already-captured tick
    timestamp**, never a fresh wall-clock
    read at the moment a switch is performed — the two can differ by however long evaluation took,
    which is small but non-deterministic and breaks exact replay comparison. Legacy:
    `MRFTperformSwitch`, `OPCClass.cs` ~line 430 (stores `DateTime.Now` instead of the tick's own
-   `TimeCurrent`). Stronger than a default-off compat flag: `chrono`'s `clock`/`now` features are
-   disabled workspace-wide, so `bhtune-core` cannot call `Utc::now()` even by accident — verified
-   by temporarily adding such a call and confirming it fails to compile (see `driver-opcda`'s
-   notes above for where this was re-verified after `opcda-bridge`/`tonic` entered the dependency
-   graph). The CLI caller uses fixed-step simulator time or UTC-anchored monotonic live time;
-   neither path reads the calendar clock again for an in-flight sample or switch.
+   `TimeCurrent`). `perform_switch` stores the supplied `tick.time`; the engine does not read
+   a clock. This is a source/API invariant, not a compiler barrier: core alone does not request
+   chrono's clock features, but SQLx enables them through Cargo feature unification in the full
+   workspace. The shared runtime supplies fixed-step simulator time or UTC-anchored monotonic
+   live time after a successful PV read, without rereading the calendar clock for a switch.
+   See the public [engine and time model](../../architecture/engine-and-time.md).
 4. **`[structurally impossible]` Lookup tables must be sized to exactly the number of process
    types that exist (6)** — no
    extra, unreachable rows/columns in the tuning-constant or default-cycle data. Legacy:
@@ -157,12 +157,14 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     explicit metadata; there is no vendor-name or historical precision fallback.
 16. **`[new feature, not a legacy bug]` A live PV/MV trend chart is a core UX expectation for the
     web GUI** — plan for high-rate streaming updates (multiple times per second) from the start;
-    see "Chart library" below. The legacy app never had a trend chart at all
+    see the [frontend architecture](../../architecture/frontend.md#live-trends-and-history).
+    The legacy app never had a trend chart at all
     (`Telerik.WinControls.ChartView` was referenced in the `.csproj` but no chart control was ever
     built), so this is new scope, not parity work — shipped via `frontend-live-stream`'s
     `TrendChart` (uPlot). Short trends reserve 12 configured poll intervals before the x-axis
     switches to full elapsed-history fitting; the blank future area is intentional and no
-    synthetic points are added.
+    synthetic future samples are added. Initial/restored-MV boundary points are presentation-only,
+    not persisted samples.
 17. **`[not applicable — feature dropped]` A licensing/loop-locking ledger's connection-open
     logic must handle a missing database file without throwing from an unobserved async task.**
     Legacy: `SQLock.CheckDB()` called `.Open()` on a `null` `SQLiteConnection` whenever

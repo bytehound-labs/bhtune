@@ -124,6 +124,17 @@ expand the contract. The controls are fairness and availability safeguards, not 
 volumetric denial-of-service protection. Network-level filtering, TLS termination, and upstream abuse controls
 remain necessary for an Internet-facing deployment.
 
+### Session and history lifecycle
+
+The server assigns visitor ownership in the initial run insert; database constraints and
+immutable ownership prevent an intermediate unowned Demo row from being exposed. Every history,
+sample, stream, and deletion lookup stays owner-scoped.
+
+Startup marks abandoned simulator runs terminal without contacting a gateway. Cleanup removes
+expired/excess visitor history but skips active runs. Admission and streaming coordination also
+use in-memory state, so sharing the database between multiple replicas does not make quotas safe;
+one replica is part of the deployment contract.
+
 ### Simulator contract
 
 The capability document and server-side request validator use the same bounded simulator

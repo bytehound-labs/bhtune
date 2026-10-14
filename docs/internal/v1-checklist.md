@@ -158,12 +158,12 @@ Everything in this section is deferred past v1, not permanently out of scope.
 - [x] REQUIRED — add/delete custom templates.
 - [x] REQUIRED — persist templates to SQLite as the source of truth, seeded from an embedded,
       community-contributable TOML catalog (`template-catalog`, done — see
-      [Community DCS/PLC template catalog](design/templates.md#community-dcsplc-template-catalog-template-catalog));
+      [Community DCS/PLC template catalog](../dcs-templates.md#where-templates-come-from));
       JSON import/export, TOML export (`template export --format toml`), and `template delete`
       are all done (`template-cli` — see
-      [Multi-template import, TOML export, and template delete](design/templates.md#multi-template-import-toml-export-and-template-delete-template-cli)),
+      [Multi-template import, TOML export, and template delete](../dcs-templates.md#cli-usage)),
       and auto-loading a user-supplied catalog file is done (`template-user-catalog` — see
-      [Auto-loading a user template catalog](design/templates.md#auto-loading-a-user-template-catalog-template-user-catalog)).
+      [Auto-loading a user template catalog](../dcs-templates.md#catalog-loading)).
 - [ ] REQUIRED — assigning the entire active template onto the tuning engine immediately before a
       test starts (§4).
 

@@ -128,6 +128,11 @@ data without a plant connection. References include the [CLI](docs/reference/cli
 [troubleshooting](docs/guides/troubleshooting.md), [glossary](docs/reference/glossary.md),
 [release guide](docs/guides/releasing.md), and [roadmap](docs/roadmap.md).
 
+The public architecture pages explain [runtime topology](docs/architecture/topology.md),
+the [engine and time model](docs/architecture/engine-and-time.md), and
+[safety and recovery boundaries](docs/architecture/safety-model.md). Design rationale lives
+with these guides rather than in a separate duplicate architecture manual.
+
 ## Plant-free native OPC DA validation
 
 Windows validation runs the real CLI through a verified official gateway and isolated synthetic

@@ -21,17 +21,34 @@ see [Contributing a template](#contributing-a-template) below.
 
 A template row in BHTune's database has one of three origins:
 
-| Origin    | Source                                                                                                                 | Re-seeded on every startup? |
-| --------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------- |
-| `builtin` | The catalog embedded in the `bhtune` binary itself (`crates/bhtune-core/templates/builtin.toml`)                       | Yes                         |
-| `catalog` | Your own catalog file, auto-loaded on startup (`--templates`/`BHTUNE_TEMPLATES`, see the README's Configuration table) | Yes                         |
-| `user`    | Hand-imported (`bhtune template import`) or otherwise created                                                          | No                          |
+| Origin    | Source                                                                                                                    | Re-seeded on every startup? |
+| --------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `builtin` | The catalog embedded in both adapters through `bhtune-core` (`crates/bhtune-core/templates/builtin.toml`)                 | Yes                         |
+| `catalog` | Your own catalog file, auto-loaded on startup (`--templates`/`BHTUNE_TEMPLATES`; see [catalog loading](#catalog-loading)) | Yes                         |
+| `user`    | Hand-imported (`bhtune template import`) or otherwise created                                                             | No                          |
 
-`builtin` and `catalog` rows are re-applied from their source file every time `bhtune`
-starts, so editing the file is how you change them; `user` rows are left alone. This is why
+`builtin` and `catalog` rows are re-applied from their source on ordinary CLI/server startup,
+but only when the existing row has the matching origin. A same-name row with a different
+origin is preserved, and `user` rows are never auto-edited. Read-only `check` does not seed
+or change the database. This is why
 there's no way to permanently delete a `builtin`/`catalog` template with `bhtune template
 delete` alone — it comes back on the next start unless you also remove it from the file
 that seeds it.
+
+The embedded catalog is compiled into BHTune, so changing it requires a rebuild. A separate
+disk catalog lets a site maintain mappings without a custom binary. User-owned templates can
+be created, copied, edited, and deleted through the Full web UI; their names stay immutable
+during editing. Run snapshots preserve the selected definition independently of later edits
+or deletion.
+
+### Catalog loading
+
+The catalog path resolves from `--templates`, then `BHTUNE_TEMPLATES`, then `templates` in
+`bhtune.toml`, then the platform configuration directory's `templates.toml`.
+A missing auto-discovered default is allowed; an explicitly selected missing path is an error.
+An existing malformed or semantically invalid file is always an error, not an empty catalog.
+See the [configuration reference](reference/config.md) for the generated configuration shape
+and the [CLI reference](reference/cli.md) for path flags.
 
 ## The TOML catalog format
 
@@ -75,10 +92,10 @@ every field below.
 ## Field reference
 
 The prose below documents each field's meaning; the same shape is also expressed as a
-machine-checked JSON Schema, generated straight from the `DcsTemplate` Rust type, at
-[`docs/reference/config.md`](reference/config.md) — useful for validating a catalog file or
-generating an editor with autocomplete, and guaranteed to never drift from what
-`bhtune template import` actually accepts.
+JSON Schema generated straight from the `DcsTemplate` Rust type at
+[`docs/reference/config.md`](reference/config.md). It describes the entry shape for editor
+autocomplete and structural validation; the semantic [validation rules](#validation) below
+also apply to imports and catalogs.
 
 ### Identity
 
@@ -146,6 +163,10 @@ The same rule is used when an engineer selects a tag in the web UI. For example,
 replaces the final component; it does not blindly append `.PV`. The preceding path and its
 final separator are preserved.
 
+This final-component replacement is template tag derivation, not a browse hierarchy rule.
+The OPC browser uses gateway-provided opaque keys and breadcrumbs; do not split an ItemID's
+punctuation to invent tree parents.
+
 {/* web-ui-screenshot: full-opc-tag-browser */}
 <figure>
   <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=912a30b57f47">
@@ -189,8 +210,7 @@ all required strings, just possibly empty).
 
 All of these are **strings**, even when they look like booleans or numbers (`"false"`,
 `"true"`, `"0"`). This matters: unquoted `false`/`true`/`0` in TOML are boolean/integer
-values, not the strings BHTune's schema expects, and would fail validation or silently
-mean something different. Always quote them.
+values, not the strings BHTune expects, and fail parsing. Always quote them.
 
 ## Validation
 
@@ -203,6 +223,7 @@ it can be used:
 - If `controller_mode_suffix` is set, both `mode_manual_value` and `mode_auto_value` must
   be non-empty.
 - If `mode_attribute_suffix` is set, `mode_attribute_program_value` must be present.
+- `pid_rounding` must explicitly contain a valid decimal-places or significant-digits policy.
 
 A template that fails validation is rejected outright — at catalog-parse time for the
 embedded/user catalog, and at `bhtune template import` time for a single-template JSON
@@ -217,10 +238,10 @@ with its own `name` and `versions` list — never edit an existing entry's suffi
 Sites still running the older release depend on the mapping exactly as it's already
 written; changing it out from under them is a silent regression for someone else.
 
-There is deliberately no separate "verified" trust field. Everything accepted into the
-catalog is treated as verified, and genuine mapping errors are fixed as bugs when they
-surface — a three-state trust badge would need someone to adjudicate and maintain it per
-template, and a stale or wrong badge is worse than no badge at all.
+There is deliberately no separate "verified" trust field. Catalog inclusion and schema
+acceptance are not an exhaustive hardware, firmware, access-permission, or control-performance
+guarantee. Review the cited mapping against the connected system and use read-only preflight
+before a live tune; report genuine mapping errors as bugs.
 
 ## Contributing a template
 
@@ -236,8 +257,8 @@ template, and a stale or wrong badge is worse than no badge at all.
    every push, so a malformed or incomplete contribution fails the build rather than
    merging silently broken.
 5. If you'd rather keep a template private to your own site instead of (or before)
-   contributing it upstream, put it in your own catalog file instead — see the README's
-   Configuration table for the `--templates`/`BHTUNE_TEMPLATES` auto-loaded catalog path.
+   contributing it upstream, put it in your own catalog file instead — see
+   [catalog loading](#catalog-loading) for the auto-loaded path.
 
 See [`CONTRIBUTING.md`](https://github.com/bytehound-labs/bhtune/blob/main/CONTRIBUTING.md)
 for the repository's general contribution workflow (branching, commit style, the CLA).
@@ -264,3 +285,10 @@ bhtune template import ./site-catalog.toml
 # Delete a template (refuses if a saved loop still references it)
 bhtune template delete "My Custom Template"
 ```
+
+Import format is detected from the content, not the extension: a leading JSON object selects
+single-template JSON; otherwise the file is parsed as a TOML catalog. Parse failures are
+reported without retrying an unrelated format. A JSON name collision fails the import.
+A TOML catalog skips and reports existing names while adding new entries; it is not an
+all-or-nothing catalog replacement. Imported entries have `user` origin and are not refreshed
+when the import file changes. Use auto-loaded catalog ownership for source-managed definitions.

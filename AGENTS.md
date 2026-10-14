@@ -1,6 +1,6 @@
 # bhtune
 
-Agent contract: architecture, invariants, commands, and safety rules. Code and tests are authoritative. Read the relevant [design note](docs/internal/design/README.md) before changing its area; keep rationale there, not in a phase diary here.
+Agent contract: architecture, invariants, commands, and safety rules. Code and tests are authoritative. Read the relevant [public architecture page](docs/architecture/topology.md) or guide before changing its area; retained research/process records are indexed in [design notes](docs/internal/design/README.md). Keep rationale with its canonical page, not in a phase diary here.
 
 ## Summary
 
@@ -30,7 +30,7 @@ Binary tests use `CARGO_BIN_EXE_bhtune` or `CARGO_BIN_EXE_bhtune-server`, matchi
 
 ## Invariants
 
-- Core is a pure `step` state machine using `f32`. Workspace `chrono` disables `clock`/`now`; `Utc::now()` must not compile in core. Callers supply tick time, reused by switches.
+- Core is a pure `step` state machine using `f32`, with no clock reads. Callers supply tick time, reused by switches. Core alone does not request chrono clock features, but workspace feature unification enables them; this is a source/API invariant, not a compile-time clock barrier.
 - Simulator time advances by the configured poll interval. Live engine time is monotonic elapsed time projected onto UTC start, captured after successful PV reads, never a driver's timestamp. Replay uses recorded timestamps.
 - `Driver` has no production core dependency; tag values are strings. Rejected writes are `Ok(WriteOutcome)`; connect, operation, and unsupported errors stay distinct.
 - OPC DA uses `tokio::sync::Mutex` across awaits; simulator uses `std::sync::Mutex` without awaits. Do not unify them. Exact `Good`/`Uncertain` strings map to those qualities; everything else is `Bad`. OPC timestamps are `None`.
@@ -88,7 +88,7 @@ Sonar project is `bytehound-labs_bhtune`. Read `SONAR_TOKEN` from ignored `.env`
 
 ## Config precedence (`cli-config`)
 
-CLI flag > environment > TOML > built-in default. Explicit missing paths and malformed existing files are errors; missing auto-discovered config/catalog files mean defaults. See the [example TOML](crates/bhtune-cli/bhtune.example.toml), [configuration reference](docs/reference/config.md), and [configuration design](docs/internal/design/config.md) for keys/paths.
+CLI flag > environment > TOML > built-in default. Explicit missing paths and malformed existing files are errors; missing auto-discovered config/catalog files mean defaults. See the [example TOML](crates/bhtune-cli/bhtune.example.toml), [configuration reference](docs/reference/config.md), and [configuration guide](docs/guides/web-ui/templates-and-configuration.md#configuration) for keys/paths.
 
 `allow_uncertain_quality` defaults true: Good passes, Bad never does, Uncertain follows policy and logs a warning. Snapshot that decision. `/config` edits the same TOML, preserving comments/unknown keys with validation, backup, and atomic replacement; stale revisions return 409. Retention saves do not delete immediately. Resolve `[tuning]` before connecting/mutating; no unlimited run.
 
@@ -108,7 +108,7 @@ All distribution channels remain: paired CLI/server archives, Docker, deb/rpm, A
 
 ## Live-plant safety hardening
 
-`cli-safety`, `safety-quality`, and `safety-cancellation` follow the [safety guide](docs/guides/safety.md) and [design evidence](docs/internal/design/safety-hardening.md).
+`cli-safety`, `safety-quality`, and `safety-cancellation` follow the [safety guide](docs/guides/safety.md) and [safety architecture](docs/architecture/safety-model.md).
 
 - Validate before mutation: finite relay amplitude 0.1-50%, count >= 1, delay <= 3600 seconds, distinct PV bounds, finite ordered MV bounds, and initial MV inside them. `tune` has no dry run: omitting `--write-pid` avoids PID constants only, not mode/MV writes. Use `check` for read-only rehearsal.
 - Whole-run timeout defaults to 3600 seconds and cannot be disabled. One process-wide `CtrlC` and `bounded_driver_call` must interrupt in-flight I/O, not just idle waits. Cap operations separately; restoration has its own budget.
@@ -158,7 +158,7 @@ Simulator selection is explicit, never a magic tag, and does not skip restore. P
 
 ## Design notes
 
-Use the [design-note index](docs/internal/design/README.md) for rationale, the [crate graph](docs/architecture/crate-graph.md) for boundaries, and [golden replay](docs/internal/design/validation-golden-replay.md) for validation. Code/tests take precedence over prose.
+The [public architecture pages](docs/architecture/topology.md) and area guides own durable rationale. The [design-note index](docs/internal/design/README.md) links them and the retained correctness/replay/documentation-process records. Code/tests take precedence over prose; do not create a second parallel manual.
 
 ## Open questions
 

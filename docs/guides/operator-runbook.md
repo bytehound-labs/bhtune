@@ -161,6 +161,31 @@ volume creates a new empty database. The image health check confirms that the lo
 liveness endpoint responds; it does not verify database readiness, external proxy access, or
 live-plant safety.
 
+### Application logging
+
+CLI and server diagnostics share the runtime logger. When initialized, it writes ANSI-free
+files under the resolved log directory, using the `bhtune.log` base name and daily rotation
+by default. An attached console also receives diagnostics on **stderr**, never stdout.
+Service-manager startup output remains separate from the application's rotating log.
+
+The CLI's `--log-level`, `--log-dir`, `--log-format`, and `--log-rotation` flags override the
+matching `[log]` settings. `RUST_LOG` overrides the TOML level when no CLI level is supplied;
+the server also honors it. Level filters can include per-crate tracing directives.
+
+```toml
+[log]
+level = "info"
+format = "pretty" # "json" selects newline-delimited JSON
+rotation = "daily" # "hourly" and "never" are also supported
+```
+
+Unknown format/rotation values fall back to pretty/daily; an invalid filter falls back to
+`info`. Logging setup is best-effort and can fail without failing the command or server.
+Verify that the service account can write the resolved directory and that a log is actually
+created; do not treat a successful health response as proof that diagnostics are being saved.
+The logger is not a substitute for persisted run, write, actuation, or recovery evidence.
+See the [configuration reference](../reference/config.md) for all log fields.
+
 ## 4. Configuration and localhost access
 
 Open the browser at:
@@ -290,6 +315,18 @@ Ctrl+C during restore abandons the restore and requires a manual loop check. Rev
 bhtune history show <run-id>
 bhtune export <run-id> --format csv > run-<run-id>-samples.csv
 ```
+
+For unattended use, `--output json` emits one final JSON value on stdout; prompts and attached-
+console diagnostics use stderr. JSON without `--write-pid` never reads stdin.
+Automated PID write-back requires both `--yes` and
+`--write-pid aggressive|moderate|sluggish`; an explicit write choice without `--yes` is rejected
+before I/O. `simulate` accepts those flags but skips PID constants. `check` accepts the
+write-readiness choice without `--yes` because it never writes.
+
+Review the [exit status](safety.md#scripting-and-exit-codes), restore status, result validity,
+and write audit independently. A terminal `Completed` database outcome can coexist with a
+subsequent failed PID write; completion alone is not automation success. External schedulers
+invoke this CLI contract rather than an in-process BHTune scheduler.
 
 ### Web GUI
 

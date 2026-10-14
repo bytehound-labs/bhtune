@@ -6,6 +6,10 @@ Keep contributions focused, behavior-preserving unless a change is intentional, 
 
 Read and sign the [CLA](CLA.md) before your first merge. The **CLA signature check** on your PR supplies the exact one-line comment to post; commenting re-runs it. Signatures are recorded on `cla-signatures` and recognized on later PRs.
 
+The PR check is read-only. Signing runs the default-branch workflow without checking out
+contributor PR code and writes only the separate signature branch; the agreement itself owns
+the legal terms.
+
 ## Development workflow: trunk-based
 
 - `main` is the only long-lived branch and must stay green. Work on short-lived `<type>/<description>` branches, including docs and one-line fixes; no `develop` or release branches.
@@ -106,7 +110,19 @@ The runner tests model/COM components serially before building the DLL; ordinary
 
 Use an owned foreground gateway on an unused high port, never port 7600, services, installed gateways, or plant namespaces. Its listener is wildcard although the client is loopback: local runs require enabled firewall profiles and an enforced owned executable inbound-block rule. Disposable hosted CI may record its disabled-firewall plant-free VM boundary without changing global policy.
 
-Finite deadlines/job objects and ownership-checked `finally` cleanup protect processes, COM keys, firewall, and scratch state; retain firewall protection on unresolved process-stop failure. Preserve environment and global UAC/DCOM/firewall policy. Unique `run-*` evidence includes source/toolchain/hash/PID metadata, bounded logs/phase outputs, audit, discovery/firewall boundary, and DB snapshots copied after owned processes stop. CI uploads failure evidence. [Testing design](docs/internal/design/testing.md#native-windows-opc-da-smoke) covers runner checks and limitations.
+Finite deadlines/job objects and ownership-checked `finally` cleanup protect processes, COM keys, firewall, and scratch state; retain firewall protection on unresolved process-stop failure. Preserve environment and global UAC/DCOM/firewall policy. Unique `run-*` evidence includes source/toolchain/hash/PID metadata, bounded logs/phase outputs, audit, discovery/firewall boundary, and DB snapshots copied after owned processes stop. CI uploads failure evidence.
+
+The plant-free mocked cleanup/process checks run without starting a gateway or registering COM:
+
+```powershell
+pwsh -NoProfile -File scripts/test-opcda-yokogawa-cleanup.Tests.ps1
+pwsh -NoProfile -File scripts/test-opcda-yokogawa-process.Tests.ps1
+```
+
+Numeric simulator regressions, golden replay, mocked bridge/browser tests, and native smoke
+prove different boundaries; none alone establishes real-plant compatibility or tuning quality.
+See the [simulator model](docs/guides/simulator-model.md) and
+[frontend architecture](docs/architecture/frontend.md).
 
 ## CI
 

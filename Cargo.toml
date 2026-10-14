@@ -43,11 +43,9 @@ bhtune-driver = { path = "crates/bhtune-driver", version = "0.1.0" }
 bhtune-db = { path = "crates/bhtune-db", version = "0.1.0" }
 bhtune-runtime = { path = "crates/bhtune-runtime", version = "0.1.0" }
 async-trait = "0.1"
-# Deliberately does NOT enable the "clock"/"now" features: bhtune-core must never be able
-# to call `Utc::now()`, since the MRFT engine's determinism guarantee (see AGENTS.md) is
-# that all timestamps come in as `Tick` data, never read from the wall clock internally.
-# Disabling the feature at the Cargo level makes that a compile-time guarantee, not just a
-# code-review convention.
+# Core timestamps enter as Tick data, never internal clock reads. This declaration does
+# not request "clock"/"now", but application dependencies enable them through Cargo feature
+# unification; it is not a workspace-wide compile-time clock barrier.
 chrono = { version = "0.4", default-features = false, features = [
   "std",
   "alloc",

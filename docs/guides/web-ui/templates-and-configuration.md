@@ -81,6 +81,18 @@ global `Uncertain`-quality policy and history retention, along with tuning timin
 settings. Startup-only values such as the database path, bind address, log directory, and
 template-catalog path remain file/configuration settings.
 
+There is one TOML configuration source, not a separate browser settings database.
+CLI flags take precedence over environment variables, then TOML, then built-in defaults.
+Missing auto-discovered files mean defaults; an explicitly selected missing file or malformed
+existing file is an error. See the [generated reference](../../reference/config.md) and
+[CLI flags](../../reference/cli.md) for the full shape and overrides.
+
+Saving preserves comments and unknown keys, validates the candidate, backs up an existing
+file, and replaces it atomically. A stale revision returns `409` instead of overwriting an
+external edit: reload, review the newer configuration, and reapply the intended change.
+Effective timing/quality policies are captured for an operation; changing configuration does
+not reinterpret a run already in progress or its recovery policy.
+
 {/* web-ui-screenshot: full-config */}
 <figure>
   <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-config.png?v=107ba6a71dcf">

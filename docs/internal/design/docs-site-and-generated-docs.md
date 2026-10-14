@@ -16,7 +16,8 @@ still uncommitted (see `.github/hooks/README.md` for why it's a pair, not a sing
 A new `crates/bhtune-cli/examples/gen_docs.rs` regenerates four artifacts from the same
 `clap`/`serde` definitions every real `bhtune` invocation already parses against, so none of
 them can silently drift the way hand-written usage docs would — reusing `gen_openapi`'s exact
-regenerate-and-diff idiom (see "Key architectural decisions" above), the pattern that file's
+regenerate-and-diff idiom (see the [public API architecture](../../architecture/api-and-streaming.md)),
+the pattern that file's
 own doc comment named this example as the intended reuse of:
 
 ```sh
@@ -56,8 +57,9 @@ DcsTemplate`, the same type `template import`/the embedded and user catalogs all
 
 **Where the `schemars` dependency lives, and why.** `DcsTemplate`'s derive lives in
 `bhtune-core`, a library target, not in the example itself — so `schemars` needed the same
-optional-feature treatment `bhtune-core` already has for `utoipa` (see "Key architectural
-decisions" above), not a plain dev-dependency: an optional regular `[dependencies]` entry,
+optional-feature treatment `bhtune-core` already has for `utoipa` (see the
+[crate graph](../../architecture/crate-graph.md#dependency-boundaries)), not a plain
+dev-dependency: an optional regular `[dependencies]` entry,
 `#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]` alongside the existing
 `#[cfg_attr(feature = "utoipa", ...)]` on `DcsTemplate` and the four `pid_config` enums it
 embeds (`ProportionalType`/`IntegralType`/`DerivativeType`/`TimeUnit`), and a `schemars`
@@ -106,8 +108,8 @@ format hook's glob — `man/*.1`, `completions/_bhtune` (no extension), and
 
 `website/` is a new pnpm workspace member (`bhtune-website`, Docusaurus 3 classic preset)
 that publishes `docs/` as a browsable, searchable site, live at
-[bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/) — see the
-`website/` row in "Crate map and phase status" above for what's done versus still pending.
+[bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/). The
+[crate graph](../../architecture/crate-graph.md) separates website and runtime responsibilities.
 Stable documentation snapshot generation is implemented; no first-release snapshot is committed
 until the stable release PR.
 
@@ -253,7 +255,8 @@ the published docs.
 touching `crates/**`, user-visible `frontend/src/**`, or screenshot tooling, then runs GitHub
 Copilot CLI headless and auto-commits narrative-prose documentation plus workflow-generated
 screenshot metadata onto same-repository PR branches — tier 2 of the documentation contract
-(see "Documentation contract" above). Fork PRs receive the candidate gallery without repository
+(see the [documentation contract](../../../AGENTS.md#documentation-contract)).
+Fork PRs receive the candidate gallery without repository
 secrets; a maintainer-triggered run is required to apply text updates. Generated CLI/config/API
 references are diff-gated by `checks.yml`. Authored glossary/API-index pages are not generated,
 but the entire `docs/reference/**` directory remains read-only to the agent; the screenshot lock is
@@ -320,6 +323,5 @@ permit shell metacharacters like `$()`, so GitHub's literal template substitutio
 attacker-controlled text directly into the script before the shell ever saw it. Pass such
 values through `env:` instead, so the value becomes a runtime shell-variable expansion rather
 than a compile-time text substitution — the standard fix for this whole vulnerability class
-(`actionlint` flags it). The auto-commit path has only been exercised by a trivial same-repo
-smoke PR — treat it as unproven under real-world drift until a real, non-trivial PR that
-actually warrants a prose change goes through it.
+(`actionlint` flags it). Author/path guards apply to every automated documentation commit;
+the generated prose and screenshot changes still require maintainer review.
