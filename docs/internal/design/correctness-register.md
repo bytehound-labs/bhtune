@@ -9,6 +9,7 @@ These are easy to get subtly wrong, so they're called out explicitly. Each shoul
 unit-test coverage, not just be caught incidentally by a golden-master replay fixture. this list
 also **is** `core-bug-register`'s deliverable: every legacy defect found during the migration is
 covered somewhere below with an explicit fix decision, tagged with one of:
+
 - **`[fixed, no flag needed]`** — the correct behavior ships and the bug has no legitimate reason
   to ever be reproduced (it was pure defect, never a documented or relied-upon behavior).
 - **`[structurally impossible]`** — stronger than "fixed": the bug's precondition cannot occur in
@@ -108,8 +109,8 @@ covered somewhere below with an explicit fix decision, tagged with one of:
    platform-standard data directory** — never an implicit hardcoded path or "wherever the process
    happened to start". Legacy: `TuningConstantsExport()` wrote to a hardcoded developer path
    (`C:\Dropbox\Auto-Tuner Proj\...`); `LogLoopLocking()` wrote to the current working directory
-   rather than the log directory. Fixed: the `bhtune` CLI's `export`/`history export` commands take an
-   explicit `--output <path>` (or write structured data to stdout for piping), and shared
+   rather than the log directory. Fixed: the `bhtune export` command takes an
+   explicit `--output <path>` (or writes structured data to stdout for piping), and shared
    logging resolves its directory through the normal config precedence, defaulting to a
    documented platform-standard data directory — never an implicit/hardcoded path.
 10. **`[fixed, no flag needed]` Test/demo mode must be a first-class, explicit driver choice**

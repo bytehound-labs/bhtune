@@ -145,8 +145,8 @@ newest successful write can be restored from the same popup using its recorded p
 Confirming a restore closes the popup immediately as well; successful restores stay silent, while
 transport failures or failed physical restores/readbacks appear in a page-level alert.
 The run-detail sections are independently collapsible. Calculated results, Trend, Summary, Notes,
-Test configuration, Initial readings, and PID change history start expanded, while Sampling
-diagnostics starts collapsed so the primary results and PID actions remain prominent. Detailed
+Test configuration, Initial readings, and PID change history start expanded. Sampling diagnostics
+are retained in CLI history, the API, and logs, not a browser panel. Detailed
 MV command/readback evidence is available through `bhtune history show`, the run-detail API, and
 structured logs rather than the normal web run-detail page.
 

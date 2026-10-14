@@ -43,8 +43,10 @@ supported installs. See the [installation guide](docs/getting-started/installati
 source-build instructions, supported distribution details, Windows installer diagnostics, and
 recovery.
 
-Source-build checks and the Rust test layout are covered in the
-[contributor guide](CONTRIBUTING.md#testing).
+Source-build prerequisites, development recipes, and applicable checks are covered in the
+[contributor guide](CONTRIBUTING.md). The [crate graph](docs/architecture/crate-graph.md) explains
+the shared runtime and peer CLI/server adapters; the [agent contract](AGENTS.md) records their
+invariants.
 
 Release packaging includes platform archives, Debian/RPM packages, AUR, Docker, and the Windows
 installer. macOS packaging includes a launchd job and a Homebrew formula template that requires
@@ -101,6 +103,8 @@ A live MRFT can switch a loop to Manual and stroke its valve. Read the
 [safety guide](docs/guides/safety.md) before connecting to plant equipment: PID constants are
 not written automatically, CLI and GUI write-back actions require explicit confirmation and
 readback verification, and an incomplete restore requires an operator to inspect the loop.
+Omitting PID write-back does not make a live tune read-only: it still changes mode and commands
+MV relay steps. Use `bhtune check` for a read-only rehearsal.
 When a live tune process ends unexpectedly, Full-mode startup exports its ownership and
 mutation evidence without contacting the controller. Export failure stops orphan retirement
 without overwriting existing evidence. Only evidence-backed orphan runs can be
@@ -126,26 +130,12 @@ data without a plant connection. References include the [CLI](docs/reference/cli
 
 ## Plant-free native OPC DA validation
 
-Windows validation runs the real CLI through a checksum- and provenance-verified official
-gateway and an isolated synthetic OPC DA COM fixture. It checks read-only preflight, paged
-browsing, one manual namespace index, and a Yokogawa-template MRFT with verified Moderate PID
-write-back and confirmed MV/mode/setpoint restoration. Product crates remain COM-free.
-
-Preflight requires OPC discovery. The runner preserves existing OPCEnum registration or
-supplies a synthetic catalog shim from the fixture DLL when it is absent. The test client uses
-loopback and an unused high port; the official gateway's wildcard listener is protected by an
-owned executable firewall block or the disposable hosted-CI boundary. Firewall verification
-requires enforcement on an active profile, not merely an enabled rule.
-Cleanup removes the owned firewall rule even if setup fails before COM registration;
-an unresolved process-stop failure retains that protection.
-Native startup failures identify the failed Windows API and its error code; empty failure
-state remains exportable as evidence. Tool selection follows PATH order; evidence records the
-effective firewall rule properties before gateway startup.
-Mocked runner checks need no native tool execution, COM registration, or firewall changes.
-
-See [Windows native OPC DA smoke](CONTRIBUTING.md#windows-native-opc-da-smoke) for reproduction.
-This test does not establish compatibility with CENTUM firmware, a site's namespace, remote
-DCOM, or controller write permissions, and does not exercise the browser UI.
+Windows validation runs the real CLI through a verified official gateway and isolated synthetic
+COM fixture: read-only preflight, paged browsing, one manual index, and a Yokogawa-template MRFT
+with PID write-back and restoration. Product OPC I/O remains COM-free. See
+[native smoke requirements and reproduction](CONTRIBUTING.md#windows-native-opc-da-smoke) for
+registration, firewall, cleanup, and evidence rules. This plant-free test does not establish
+CENTUM firmware, site/DCOM/write-permission compatibility, or browser rendering.
 
 ## License
 

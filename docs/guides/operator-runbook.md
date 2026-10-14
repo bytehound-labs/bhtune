@@ -237,7 +237,7 @@ bhtune opc browse --server Matrikon.OPC.Simulation.1 \
 Close an explicit browse session when it is no longer needed:
 
 ```sh
-bhtune opc close <session-id>
+bhtune opc close <session-id> --bridge-host gateway.plant.local:7600
 ```
 
 Confirm the read value, quality, timestamp behavior, and any transport error before preparing
@@ -256,7 +256,7 @@ Complete this checklist immediately before a live tune:
 6. Confirm the configured poll interval is comfortably shorter than the expected oscillation
    period.
 7. Confirm `[tuning].timeout_secs`, `op_timeout_secs`, and `restore_timeout_secs` are appropriate.
-8. Decide whether the run is observation-only or will request a PID write-back.
+8. Decide whether to omit calculated PID write-back or request it. Either live tune still changes mode and commands MV.
 9. If writing, choose the response level and verify the destination P/I/D tags.
 10. Ensure an independent database backup exists before a packaging upgrade or recovery action.
 
@@ -267,7 +267,8 @@ not plant readiness.
 
 ### CLI
 
-Start an observation-only live tune:
+Start a live tune without calculated PID write-back. This still changes mode and commands MV;
+use `bhtune check` for a read-only preflight:
 
 ```sh
 bhtune tune \
@@ -330,13 +331,19 @@ tune.
 
 ## 10. Backup, restore, retention, and export
 
-Before copying a live SQLite database, stop the service:
+Before copying SQLite state, stop every process using that database. Use a prepared, private
+backup directory; fail on copy errors rather than silently dropping sidecars:
 
 ```sh
+set -eu
 sudo systemctl stop bhtune-server
-cp -a /var/lib/bhtune/bhtune.db /safe/location/
-cp -a /var/lib/bhtune/bhtune.db-wal /safe/location/ 2>/dev/null || true
-cp -a /var/lib/bhtune/bhtune.db-shm /safe/location/ 2>/dev/null || true
+sudo cp -a /var/lib/bhtune/bhtune.db /safe/location/
+if sudo test -e /var/lib/bhtune/bhtune.db-wal; then
+  sudo cp -a /var/lib/bhtune/bhtune.db-wal /safe/location/
+fi
+if sudo test -e /var/lib/bhtune/bhtune.db-shm; then
+  sudo cp -a /var/lib/bhtune/bhtune.db-shm /safe/location/
+fi
 sudo systemctl start bhtune-server
 ```
 

@@ -13,7 +13,7 @@
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
 - [ ] `cargo test --workspace` passes
 - [ ] `cargo deny check` passes (no proprietary/non-open-source dependencies — see `deny.toml`)
-- [ ] Frontend changes: `pnpm --filter bhtune-frontend run format:check` / `run lint` / `run typecheck` pass
+- [ ] Frontend changes: `pnpm --filter bhtune-frontend run format:check` / `run lint` / `run build` (including typechecking) pass
 - [ ] Documentation (`README.md`, `docs/`, `AGENTS.md`) updated if this changes user-visible behavior
 - [ ] Applicable SonarQube analysis reports zero `OPEN`/`CONFIRMED` issues, or any remaining
       Accepted/False Positive finding has a documented rationale and related link

@@ -70,7 +70,8 @@ Measurement noise is added after the process update. It is sampled uniformly fro
 ```
 
 A zero noise amplitude disables noise. A fixed RNG seed produces the same noise sequence for
-the same simulator configuration and MV-write sequence.
+the same simulator configuration and MV-write sequence within the same supported platform and
+build; the RNG algorithm is not a cross-version portability guarantee.
 
 The initial PV is assumed to be the steady-state value for the initial MV. The configured PV
 and MV ranges constrain the tuning setup and initial values; they do not turn the simulator into

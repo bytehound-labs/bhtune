@@ -29,7 +29,7 @@ cargo run -p bhtune --example gen_docs --features schemars
   producing a table of contents plus one section per command/subcommand with its usage,
   options, and doc-comment prose.
 - **`man/*.1`** — one man page per command _and_ subcommand (`bhtune.1`, `bhtune-tune.1`,
-  `bhtune-template.1`, `bhtune-template-list.1`, ... 18 pages total), matching the convention
+  `bhtune-template.1`, `bhtune-template-list.1`, ...), matching the convention
   real multi-command tools use (git, cargo) rather than one flat page. `clap_mangen::Man`
   only renders a single `clap::Command` at a time, so `gen_docs.rs` walks
   `Command::get_subcommands()` recursively itself, renaming each nested `Command` to its full
@@ -200,8 +200,7 @@ first stable release so the site does not expose a meaningless single-version se
 `cargo doc --workspace --no-deps --all-features` output is published under `/api/` on the
 docs site, alongside a hand-written index page at `docs/reference/api.md` (linked from the
 site navigation/footer and from `docs/reference/_category_.json`'s sidebar). Together these
-give contributors a real, browsable rustdoc reference for all six crate/binary targets
-(`bhtune`, `bhtune_driver`, `bhtune_cli`, `bhtune_core`, `bhtune_db`, `bhtune_server`)
+give contributors a real, browsable rustdoc reference for the workspace's crate/binary targets
 without hand-authoring any of the content itself.
 
 **Rustdoc output has no root `index.html` for a multi-crate workspace**, and produces five
@@ -255,8 +254,9 @@ touching `crates/**`, user-visible `frontend/src/**`, or screenshot tooling, the
 Copilot CLI headless and auto-commits narrative-prose documentation plus workflow-generated
 screenshot metadata onto same-repository PR branches — tier 2 of the documentation contract
 (see "Documentation contract" above). Fork PRs receive the candidate gallery without repository
-secrets; a maintainer-triggered run is required to apply text updates. Tier 1
-(`docs/reference/**`, generated) is already diff-gated by `checks.yml`; the screenshot lock is
+secrets; a maintainer-triggered run is required to apply text updates. Generated CLI/config/API
+references are diff-gated by `checks.yml`. Authored glossary/API-index pages are not generated,
+but the entire `docs/reference/**` directory remains read-only to the agent; the screenshot lock is
 workflow-owned; tier 3 (`AGENTS.md`) is explicitly off limits to this workflow.
 
 Screenshot capture waits until each documented section is visible, then settles document fonts
@@ -279,7 +279,7 @@ these):
    owned commit only touches `docs/**`/`README.md` and the generated screenshot lock, which do
    not match those implementation paths), but the explicit author check doesn't rely on that
    alone.
-2. **Blast radius.** The agent may only touch `docs/**` (excluding generated references except
+2. **Blast radius.** The agent may only touch `docs/**` (excluding all `docs/reference/**` except
    for the workflow-owned Web UI screenshot lock) and `README.md`; the screenshot capture is the
    only workflow step allowed to update that lock. Enforced twice: a `--deny-tool 'write(AGENTS.md)'`
    flag blocks the one specific file that must never be auto-edited regardless of path-prefix

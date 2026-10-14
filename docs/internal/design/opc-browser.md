@@ -101,7 +101,7 @@ metadata, namespace source, and warnings. The gateway's indexed-search extension
 with persistent-index state, progress, ranked exact matches, breadcrumbs, and `has_more`.
 `POST /api/opc/search-index/auto-refresh` persists the selected server's explicit choice.
 `auto_refresh_enabled` and the actual scheduler next-refresh date remain separate from an
-active build's foreground/health/operator pause. The public bridge structs use the 0.5 Rust
+active build's foreground/health/operator pause. The public bridge structs use the 0.6 Rust
 dependency line, while the restored preference field and controls retain the published
 indexed-search protocol 2 contract.
 `openapi.json` and `frontend/src/api/schema.d.ts` are regenerated from the route definitions.
