@@ -153,7 +153,8 @@ write the calculated PID constants back:
 bhtune tune ... --write-pid moderate --yes
 ```
 
-`--yes` is mandatory alongside `--write-pid` for any non-interactive write — see
+`--yes` is mandatory alongside `--write-pid` on every CLI tune path, including interactive use. Omitting
+`--write-pid` skips calculated PID constants, not the live tune's mode/MV writes. See
 [Safety](../guides/safety.md#pid-write-back).
 
 ## Check a live loop without starting a tune
@@ -186,8 +187,8 @@ one or more checks failed or `--strict` rejected a warning.
 `--output json` emits exactly one parseable JSON value on stdout on every path (success,
 timeout, abort, write-back failure), with meaningful, distinguished process exit codes, so a
 scheduler can tell a clean completion, a Ctrl+C abort, and a failed write-back apart without
-parsing prose — see [Automation](../reference/cli.md) and the exit code table in
-[`AGENTS.md`](https://github.com/bytehound-labs/bhtune/blob/main/AGENTS.md#automation-cli-automation)
+parsing prose — see the [CLI reference](../reference/cli.md) and
+[scripting and exit codes](../guides/safety.md#scripting-and-exit-codes)
 for the full contract.
 
 ## Next steps

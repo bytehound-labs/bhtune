@@ -4,9 +4,10 @@ sidebar_position: 1
 
 # Installation
 
-BHTune has not made its first tagged release yet — see the
-[Releases](https://github.com/bytehound-labs/bhtune/releases) page for prebuilt binaries once
-one exists. Until then, run the published Docker image or build from source. The repository also
+BHTune has not made its first stable release. The
+[Releases](https://github.com/bytehound-labs/bhtune/releases) page includes validation-only release
+candidates, not supported stable installations. Build from source or use the pre-release Docker
+image for evaluation. The repository also
 contains the Windows NSIS installer workflow and validation sources; a stable release will attach
 the resulting installer beside the matching Windows archive.
 
@@ -237,8 +238,8 @@ preserve `/usr/local/var/bhtune` explicitly.
 ## Run via Docker
 
 A multi-stage image (frontend build → `cargo build --release` → slim Debian runtime) is
-published to [GHCR](https://github.com/bytehound-labs/bhtune/pkgs/container/bhtune) on every
-push to `main` as `edge`, and under version tags plus `latest` after a release tag. For a
+published to [GHCR](https://github.com/bytehound-labs/bhtune/pkgs/container/bhtune) on
+image-affecting pushes to `main` as `edge`, and under version tags plus `latest` after a release tag. For a
 pre-release smoke test, `edge` is the available image; use the immutable version tag for a
 stable deployment after release activation:
 
@@ -323,7 +324,7 @@ dependency, `protoc` included, is open-source (machine-enforced in CI via `cargo
 ```sh
 git clone https://github.com/bytehound-labs/bhtune.git
 cd bhtune
-cargo build --workspace --release
+cargo build --workspace --release --locked
 ```
 
 This produces `target/release/bhtune` (the headless CLI) and `target/release/bhtune-server`
@@ -336,12 +337,14 @@ Skip this if you only want the CLI, or if you're developing the frontend itself 
 dev server (see [Web GUI quickstart](web-gui-quickstart.md)).
 
 ```sh
-pnpm install                              # from the repo root -- this is a pnpm workspace
+pnpm install --frozen-lockfile
 pnpm --filter bhtune-frontend run build
+cargo build -p bhtune-server --release --locked
 ```
 
 `bhtune-server` embeds the built `frontend/dist/` directory directly into its own binary via
-`rust-embed`, so once this step has been run once, `bhtune-server` is a single self-contained
+`rust-embed`. Build the frontend before rebuilding the release server, and rebuild after each
+frontend change. The resulting `bhtune-server` is a single self-contained
 executable — no separate static file server, Node runtime, or reverse proxy required on the
 target host.
 
@@ -356,7 +359,8 @@ overridden — see [Configuration precedence](../reference/config.md)):
 | Windows      | `%APPDATA%\bhtune\`                                                |
 
 (BHTune resolves this the same way on macOS as Linux — a plain XDG-style fallback, not
-`~/Library/Application Support/` — see `default_db_path_from` in the `bhtune` package's `config.rs` if
+`~/Library/Application Support/` — see `default_db_path_from` in
+`crates/bhtune-runtime/src/config/paths.rs` if
 you need the exact precedence.)
 
 This holds `bhtune.db` (the SQLite database — every template, loop, tune run, sample, result,
@@ -557,15 +561,15 @@ regardless of which account the SCM happens to run it as.
 
 ```sh
 sudo install -m755 target/release/bhtune-server /usr/local/bin/bhtune-server
-sudo install -Dm644 packaging/systemd/bhtune-server.service \
+sudo install -Dm644 packaging/systemd/manual/bhtune-server.service \
     /etc/systemd/system/bhtune-server.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now bhtune-server
 ```
 
-The provided [`packaging/systemd/bhtune-server.service`](https://github.com/bytehound-labs/bhtune/blob/main/packaging/systemd/bhtune-server.service)
+The provided [`packaging/systemd/manual/bhtune-server.service`](https://github.com/bytehound-labs/bhtune/blob/main/packaging/systemd/manual/bhtune-server.service)
 unit uses `DynamicUser=true` (an ephemeral, unprivileged account systemd creates for the
-service's lifetime — no separate `useradd` step) plus `StateDirectory=`/
+service's lifetime — no separate `useradd` step), `/usr/local/bin/bhtune-server`, and `StateDirectory=`/
 `ConfigurationDirectory=` so the database and logs live at `/var/lib/bhtune/` and an optional
 config file at `/etc/bhtune/bhtune.toml`, both owned correctly with no manual `chown` needed.
 Unlike the Windows service above, this sidesteps the per-account path problem entirely — a

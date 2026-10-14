@@ -1,271 +1,97 @@
 # Contributing to BHTune
 
-BHTune is under active development. The practices below apply to all contributions.
+Keep contributions focused, behavior-preserving unless a change is intentional, and covered by the relevant checks and documentation.
 
 ## Contributor License Agreement
 
-Before your first pull request can be merged, you must sign the [Contributor License
-Agreement](CLA.md). Please read it in full before signing — it sets out exactly what rights you
-grant and what rights you keep.
-
-Signing happens on the pull request itself; there is no paperwork and no account to create. If
-you have not signed yet, the **CLA signature check** fails and its summary quotes the exact
-one-line statement to post. Add that line as a new comment on your pull request and the check
-re-runs automatically. Your signature is recorded on the repository's `cla-signatures` branch and
-recognized automatically on every later pull request.
+Read and sign the [CLA](CLA.md) before your first merge. The **CLA signature check** on your PR supplies the exact one-line comment to post; commenting re-runs it. Signatures are recorded on `cla-signatures` and recognized on later PRs.
 
 ## Development workflow: trunk-based
 
-- `main` is the only long-lived branch and should always be green (builds, passes CI).
-- Work happens on short-lived branches named `<type>/<short-description>` (e.g.
-  `feat/mrft-state-machine`, `fix/mv-boundary-clamp`), opened as a PR and merged within a day or
-  two — not long-running feature branches.
-- PRs are squash-merged, so the squash commit message (not the intermediate commits) must follow
-  the commit convention below.
-- No `develop` branch and no long-lived `release` branches. Releases are tagged directly off
-  `main` ([SemVer](https://semver.org/)).
-- Incomplete or experimental work that must land before it is fully ready goes behind a Cargo
-  feature flag rather than sitting unmerged on a branch.
-- Every change goes through a feature branch and pull request, including documentation and
-  one-line fixes, so CI runs consistently and concurrent work does not bypass review.
-- After opening a pull request, keep repairing the same branch until every applicable required
-  check passes. If a check reports that the branch is behind `main`, update the branch before
-  merging; do not bypass the protection rule with a direct push.
+- `main` is the only long-lived branch and must stay green. Work on short-lived `<type>/<description>` branches, including docs and one-line fixes; no `develop` or release branches.
+- Open a focused PR and repair that same branch until all applicable checks pass. Keep it current with `main`; never bypass protection with direct/force pushes or admin merges.
+- Squash-merge only after maintainer review, any required manual testing, and explicit merge approval. Passing checks alone do not authorize merging.
+- Incomplete work that must land uses a Cargo feature flag, not a long-lived experimental branch.
 
 ## Workspace architecture
 
-- `bhtune-runtime` owns the application services shared by the CLI and server: configuration,
-  database bootstrap, logging, retention, driver setup, tune execution and safety, history
-  write/revert operations, and shared exports.
-- `bhtune` adapts `clap` commands and terminal interaction to the runtime. CLI prompts,
-  exit codes, output formatting, and generated command references remain adapter concerns.
-- `bhtune-server` adapts HTTP requests and responses to the runtime. Axum routes, HTTP DTOs,
-  OpenAPI schemas, and SPA serving remain server concerns; the server does not depend on the
-  CLI.
-- Keep the runtime's source and direct dependencies independent of `clap`, HTTP frameworks,
-  and OpenAPI libraries. The OPC DA gRPC client may bring transport crates transitively; do not
-  use those crates in runtime APIs. Convert transport-specific inputs and outputs at the adapter
-  boundary instead of duplicating application behavior.
+The [crate graph](docs/architecture/crate-graph.md) and [agent contract](AGENTS.md#crate-map) describe the boundaries. `bhtune-runtime` owns shared configuration/bootstrap, logging, drivers, tune/safety/recovery, history operations, and exports. The CLI and HTTP server are peer adapters: keep terminal/Clap and Axum/HTTP/OpenAPI concerns out of runtime source, direct dependencies, and APIs, and never make the server depend on CLI application services. Transitive gRPC transport dependencies are not permission to expose transport types in runtime APIs.
 
 ## Commit messages
 
-[Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <description>`.
+Use [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <description>`, with optional scope. Example: `feat(core): port MRFT hysteresis switch detection`.
 
-Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `ci`.
-Example: `feat(core): port MRFT hysteresis switch detection`.
+Release-worthy types are `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, and `revert`; release preparation and generic `chore` commits are not product content. The reviewed squash message is authoritative. Do not add a Copilot co-author trailer.
 
 ## Code style
 
-- Use Rust's `stable` toolchain for local development to match the regular validation, coverage,
-  SonarQube, and release jobs. The MSRV job separately checks Rust 1.94.0; on rustup-managed
-  hosts, run `rustup update stable` if the selected toolchain is older.
-- Format Rust with `cargo fmt --all` (default rustfmt settings) before committing. The optional
-  `just fmt` recipe applies the same formatter to the workspace.
-- Lint with `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`. Lint
-  levels come from the workspace lint policy described under [Lint policy](#lint-policy).
-- Format frontend code (`frontend/`) with `pnpm --filter bhtune-frontend run format:check` /
-  `pnpm exec prettier --write .`, and lint it with `pnpm --filter bhtune-frontend run lint`
-  ([oxlint](https://oxc.rs/), with warnings treated as failures). The documentation site
-  (`website/`) uses the same tools via `pnpm --filter bhtune-website run format:check` /
-  `pnpm --filter bhtune-website run lint`.
-- Python scripts in `scripts/` use Ruff 0.16.9 and the standard-library `unittest` runner.
-  Run `ruff check scripts`, `ruff format --check scripts`, and
-  `python3 -m unittest discover -s scripts -p '*_test.py'`.
-- The [lefthook](https://github.com/evilmartians/lefthook) `pre-commit` hook (`.lefthook.yml`)
-  runs source-triggered lint/build checks and formats staged files with `rustfmt`, `taplo`,
-  `prettier`, and `shfmt`. Its generated-file exclusions are deliberate. Run `lefthook install`
-  once after cloning to enable the hooks; they also keep the `.env.example`/Bitwarden
-  synchronization workflow active.
-- No proprietary or non-open-source dependencies, ever, on either side of the stack.
-  `cargo deny check` enforces this in CI for Rust dependencies against the allow-list in
-  `deny.toml`; `pnpm run check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the
-  equivalent allow-list for npm dependencies. If either fails on a new dependency, look for an
-  open-source alternative rather than widening the allow-list.
-- Run `pnpm run check:dead-code` to use Knip across the root, frontend, and documentation-site
-  workspaces. Treat unused files, dependencies, and exports as cleanup candidates; configuration
-  exceptions are intentionally narrow and belong in `knip.jsonc`.
-- SonarQube Cloud analyzes Rust, TypeScript/TSX, the documentation site, and repository scripts.
-  To reproduce its Rust coverage input locally, run
-  `cargo llvm-cov --workspace --locked --lcov --output-path lcov.info` followed by
-  `sonar-scanner` with `SONAR_TOKEN` exported. The Sonar workflow runs for relevant pull
-  requests and pushes to `main`, plus a Wednesday 04:17 UTC weekly scan; fork pull requests
-  intentionally skip the secret-bearing analysis.
-- Maintainers can restore the local Sonar token with
-  `rbw unlock && rbw sync && ds sync`; it lives in the ignored `.env` file and
-  is never committed or printed. Use `ds push` to update the Bitwarden
-  note after changing it. The committed `.env.example` contains only the key names and the
-  repository's Lefthook hooks keep the schema and local file synchronized.
+- Use stable Rust for ordinary development; root `Cargo.toml` declares MSRV 1.94 and edition 2024. CI separately checks MSRV and Windows code.
+- Rust formatting/linting, frontend/site formatting and oxlint, and dependency/license checks use the commands below. No proprietary/non-open-source dependencies; find an allowed alternative rather than widening license allow-lists.
+- Python uses the Ruff version pinned in CI and standard-library unittest: `ruff check scripts`, `ruff format --check scripts`, and `python3 -m unittest discover -s scripts -p '*_test.py'`.
+- Install Lefthook with `lefthook install`. Hooks format staged non-generated files and run source-triggered lint/build checks, not the full test suite. Preserve generated exclusions and `.env`/Bitwarden sync. Never commit secrets; without a local `.env`, use `LEFTHOOK=0` so sync cannot erase the shared note.
+- Knip's `pnpm run check:dead-code` reports unused files/dependencies/exports; exceptions in `knip.jsonc` must stay narrow.
 
 ### Optional local task runner (`just`)
 
-The repository-root `justfile` offers shortcuts for local development. `just` is optional:
-GitHub Actions continues to run its workflow commands directly and does not require `just` to be
-installed. Frontend recipes assume the pnpm workspace dependencies are installed with
-`pnpm install --frozen-lockfile`.
+`just` is optional; its recipes use the same underlying repository commands as CI. Install pnpm workspace dependencies with `pnpm install --frozen-lockfile`.
 
-- `just check` is the practical local equivalent of the Linux Rust check job: it checks
-  formatting and rustdoc warnings, runs Clippy and workspace tests, runs `cargo deny check`
-  and `cargo machete`, checks OpenAPI and CLI-reference drift, and builds the workspace. PR
-  CI additionally checks OpenAPI compatibility against the base branch.
-- `just fmt` formats all Rust code. `just fmt check` runs the non-mutating
-  `cargo fmt --check --all` gate; use `just check` for validation.
-- `just lint` and `just test` run the locked workspace lint and test commands. `just deny` runs
-  `cargo deny check` and `cargo machete`. `just cov` writes `lcov.info` with the same
-  `cargo llvm-cov` command as CI; the coverage workflow also enforces 100% source-line coverage
-  and uploads the report.
-- `just gen` regenerates `openapi.json`, the CLI reference/man pages/completions/config schema,
-  and the TypeScript API client. Review generated diffs and commit output only when a source
-  change requires it.
-- `just fe` runs the frontend license, generated-client drift, format, lint, unit-test, and
-  typecheck/build checks.
-- `just e2e` builds the server and frontend, installs Chromium, and runs the Full and Demo
-  Playwright projects. Playwright starts its own isolated test servers; a separate production
-  server is not required.
-- `just dev` runs a local `bhtune-server` and Vite against a temporary database and log
-  directory, then removes that temporary state when stopped with Ctrl+C. Ports `8787` and
-  `5173` must be free; the recipe refuses to start when either is occupied and never stops an
-  existing listener. The server binds `0.0.0.0:8787`; use `http://localhost:5173` by default,
-  or set `BHTUNE_ORIGIN` to the exact Vite origin when using another host name.
+| Recipe                                  | Purpose                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `just check`                            | Rust fmt, strict Clippy/rustdoc, tests, deny/machete, generated-reference drift, workspace build. |
+| `just fmt` / `just fmt check`           | Format Rust / check without editing.                                                              |
+| `just lint` / `just test` / `just deny` | Individual locked lint/test or dependency checks.                                                 |
+| `just cov`                              | Generate Rust LCOV; enforce the canonical-line policy below.                                      |
+| `just gen`                              | Regenerate OpenAPI, CLI/config references, man/completions, and TS API schema.                    |
+| `just fe`                               | Licenses, client drift, format, lint, unit tests, and frontend typecheck/build.                   |
+| `just e2e`                              | Build server/frontend, install Chromium, run Full/Demo serially with isolated servers.            |
+| `just dev`                              | Temporary DB/config/logs, API on `0.0.0.0:8787`, Vite on 5173; Ctrl+C cleans owned state.         |
 
-Lefthook remains independent of `just` and keeps its file-scoped behavior: `rustfmt-format`
-corresponds to `just fmt` but formats only staged Rust files. `clippy-lint` uses the same
-workspace Clippy checks as `just lint` without `--locked`; `oxlint-frontend` and
-`frontend-typecheck` correspond to checks in `just fe`. For frontend files,
-`prettier-format` corresponds to `just fe`'s format check, while the hook formats only staged,
-non-generated files. `taplo-format`, `shfmt-format`, `check-release`, and `ds-sync` remain
-hook-specific. Pre-commit does not run the workspace test suite or invoke `just check`; it
-retains its staged-file inputs and generated-file exclusions.
+`just dev` refuses occupied ports and never stops unrelated listeners. Use `http://localhost:5173`; another host needs the exact `BHTUNE_ORIGIN` and Vite host allowance. It is an unauthenticated trusted-network development setup.
 
 ### Lint policy
 
-The root `Cargo.toml` defines one workspace-wide lint policy in `[workspace.lints]`. Every member
-crate opts in with `[lints] workspace = true`, so libraries, binaries, tests, examples, and build
-scripts share the same baseline. The standalone `fuzz/` package is a separate Cargo workspace and
-is not covered. The test-only `tests/opcda-yokogawa-fixture/` workspace has explicit Windows
-formatting, Clippy, focused tests, and dependency/license gates. Code behind `#[cfg(windows)]`
-is linted by the Windows CI job.
+`[workspace.lints]` in root `Cargo.toml` applies to every product/test-support member's libraries, binaries, tests, examples, and build scripts. `fuzz/` and the native fixture are separate workspaces; the fixture has explicit Windows gates below.
 
-- `deny` marks constructs that must never land and is an error even without `-D warnings`:
-  `unsafe_code`, which every `rustc` build checks, and these lints, which `cargo clippy`
-  checks: leftover `dbg!`, `todo!`, and `unimplemented!` macros, undocumented `unsafe` blocks,
-  every default Clippy group (`clippy::all`), and the panic restriction lints
-  `clippy::unwrap_used`, `clippy::expect_used`, and `clippy::panic`.
-- Production code returns a typed error instead of panicking. That includes code that runs
-  after a live loop has been switched to manual, where a panic would skip restore. Unit tests
-  allow those three lints with a crate-root `#![cfg_attr(test, allow(...))]`. Integration
-  tests, examples, and benches allow them with a file-level `#![allow(...)]`, because a
-  crate-root test allow does not cover those targets. Four production `expect` calls remain.
-  Each is a real invariant with a site-level `#[allow(clippy::expect_used, reason = "...")]`:
-  request-snapshot serialization before any driver I/O, the embedded template catalog parse,
-  a non-empty browse-page vector, and an integer `Retry-After` header value.
-- `warn` marks hygiene findings: `rust_2018_idioms`, the redundant/unused lifetime and unused
-  macro-rule lints, and a curated subset of `clippy::pedantic` whose lints are cheap and
-  mechanical to satisfy. Warnings stay non-fatal in a local build but fail CI, whose Clippy job
-  runs with `-D warnings`.
-- The rest of `clippy::pedantic` stays off because its noisiest lints are subjective or would add
-  hundreds of low-value annotations. `clippy::nursery` (unstable, prone to false positives) and
-  `clippy::cargo` (duplicate transitive versions are not fixable here, and `cargo deny` owns
-  dependency policy) stay off as well.
-- Fix a finding rather than suppressing it. When a suppression is genuinely correct, put a
-  narrowly scoped `#[expect(lint, reason = "...")]` on the smallest item that needs it. Prefer
-  `#[expect]` over `#[allow]`: once the finding disappears it raises an
-  `unfulfilled_lint_expectations` warning, which fails CI, so a stale suppression cannot
-  linger. The panic-lint allows above are the exception, because those lints are intentionally
-  permitted in tests and on the four invariant sites. Other crate-level blanket allows are not
-  accepted.
-- Keep `unsafe` out of production code. When a test genuinely needs it (for example, delivering
-  a real OS signal with `libc::kill`), isolate it in a small function carrying
-  `#[expect(unsafe_code, reason = "...")]` and put a `// SAFETY:` comment inside the function
-  body, directly above the `unsafe` block. `clippy::undocumented_unsafe_blocks` does not
-  recognize a comment placed above the function signature or its attributes, including a doc
-  comment.
-- To propose another lint, measure its findings with
-  `cargo clippy --workspace --all-targets --all-features -- -W clippy::<lint>` and fix them in
-  the same change that enables it.
+- Denied: production unsafe code, `dbg!`, `todo!`, `unimplemented!`, undocumented unsafe blocks, default Clippy groups, and `unwrap`/`expect`/panic restrictions. Production returns typed errors, especially after loop mutation when panic could skip restore.
+- Tests allow panic restrictions at the appropriate crate root or integration/example/bench file. Existing production invariant exceptions need a site-level allow with a reason, never a blanket exemption.
+- Hygiene and the curated pedantic subset warn locally but fail strict CI. The remainder of pedantic, nursery, and cargo groups is intentionally off; dependency policy belongs to deny/machete.
+- Fix findings. A justified suppression uses the smallest `#[expect(lint, reason = "...")]`; an unfulfilled expectation must fail CI. Do not weaken lints or use broad allows, `NOSONAR`, or dashboard dispositions to hide actionable issues.
+- A necessary unsafe test helper needs a scoped `#[expect(unsafe_code, reason = "...")]` and a `// SAFETY:` comment inside its body directly above the block. Native COM ABI code stays confined to the unpublished fixture, never product crates.
+- Propose a lint by measuring `cargo clippy --workspace --all-targets --all-features -- -W clippy::<lint>` and fixing its findings in that change.
 
 ## Dependency updates
 
-Dependabot checks the product and native-fixture Cargo workspaces, pnpm workspace, and GitHub
-Actions weekly, grouping routine patch and minor updates within each ecosystem. Major updates
-are intentionally left as focused,
-individual PRs. Routine updates should use the grouped PRs and update the relevant manifest and
-lockfile together; use the latest compatible version rather than blindly accepting a major release
-that breaks the current toolchain or code-generation stack.
+Dependabot groups weekly patch/minor updates for product/fixture Cargo, pnpm, and Actions; major upgrades are focused PRs. Change manifests and lockfiles together, preserve MSRV and frontend/site/codegen compatibility, and document necessary pins rather than treating latest as unconditional.
 
-Major updates should be handled as focused PRs so compatibility work is easy to review. Cargo
-updates must preserve the declared `rust-version` unless the project intentionally raises its
-MSRV, and pnpm updates must keep the frontend and documentation-site toolchains compatible
-(notably TypeScript and `openapi-typescript`). Record any necessary compatibility pin in the
-nearest contributor-facing documentation and revisit it when the blocking dependency supports
-the newer major.
-
-Before merging an update, run the full ecosystem gates: Rust formatting, Clippy, workspace
-tests, the declared MSRV check, `cargo deny check`, and `cargo machete`; frontend and website
-format/lint/typecheck/build checks; OpenAPI and generated-reference drift checks; the Playwright
-suite; and npm license validation. A periodic intentional sweep of all direct dependencies is
-appropriate for a release or maintenance cycle, but it should still follow these compatibility
-and validation rules rather than treating "latest" as an unconditional upgrade policy.
+Run all affected ecosystem gates below, plus the MSRV check for Cargo updates. A release-time dependency sweep follows the same review and validation policy.
 
 ## Testing
 
-- Unit-test domain logic with `cargo test --workspace`.
-- Large unit-test suites use `#[cfg(test)] mod tests;`. Both `foo.rs` and `foo/mod.rs`
-  use `foo/tests.rs`. Nested test modules keep their names in
-  `foo/tests/<module>.rs`, preserving private parent access and existing test filters.
-  File-only test refactors must preserve the `cargo test --workspace --locked -- --list`
-  inventory and canonical source-line coverage.
-- Frontend helper and component unit tests use Vitest with jsdom:
-  `pnpm --filter bhtune-frontend run test`.
-- `bhtune-core` (the MRFT engine and tuning math) must stay a pure, I/O-free state machine so it
-  can be tested deterministically and validated by replaying golden-master traces. See
-  `AGENTS.md` for the replay-validation approach and the correctness-critical details that need
-  direct unit-test coverage.
-- Coverage is tracked by Codecov and enforced at exactly 100% (`codecov.yml`). The coverage
-  workflow independently checks every canonical LCOV `DA` source-line record, rejects any
-  zero-hit line, and normalizes the report's aggregate `LF`/`LH` summary before uploading it.
-  Add tests for new code — including error branches and edge cases — in the same PR.
-- End-to-end browser tests live in `frontend/e2e/` (Playwright), driving a real
-  `bhtune-server` running the simulator driver through the actual built UI — no mocked HTTP
-  layer for the real suites. The mocked Demo contract suite runs in the same Demo project.
-  Run the Full and Demo projects independently with:
+Test pure domain logic with `cargo test --workspace --locked` and frontend helpers/components with `pnpm --filter bhtune-frontend run test`. Keep core clock/I/O-free; [golden replay](docs/internal/design/validation-golden-replay.md) complements focused regressions for the [correctness register](docs/internal/design/correctness-register.md).
 
-  ```sh
-  pnpm --filter bhtune-frontend run build   # builds frontend/dist/
-  cargo build -p bhtune-server              # debug build serves dist/ live off disk
-  npx --prefix frontend playwright install chromium   # first run only
-  PLAYWRIGHT_MODE=full pnpm --filter bhtune-frontend exec playwright test --project=full
-  PLAYWRIGHT_MODE=demo pnpm --filter bhtune-frontend exec playwright test --project=demo
-  ```
+Large unit suites use `#[cfg(test)] mod tests;`: `foo.rs` and `foo/mod.rs` both use `foo/tests.rs`; nested modules use `foo/tests/<module>.rs`. File-only refactors preserve private access, the `cargo test --workspace --locked -- --list` inventory, and canonical source-line coverage.
 
-  The Demo project also requires `openssl` for its isolated loopback HTTPS certificate. Running
-  `pnpm --filter bhtune-frontend run test:e2e` without `PLAYWRIGHT_MODE` runs both projects and
-  starts both isolated test servers.
+Coverage is 100% of canonical LCOV `DA` product-source lines. CI rejects zero-hit lines and normalizes aggregate `LF`/`LH` before Codecov upload; never weaken this policy. Add focused cases for changed behavior, errors, and meaningful edge cases.
+
+Playwright's real suites drive the built UI and actual simulator server; the mocked Demo contract suite is separate evidence within the Demo project. List the actual inventory with `pnpm --filter bhtune-frontend exec playwright test --list`. Run projects with:
+
+```sh
+pnpm --filter bhtune-frontend run build
+cargo build -p bhtune-server --locked
+pnpm --filter bhtune-frontend exec playwright install chromium
+PLAYWRIGHT_MODE=full pnpm --filter bhtune-frontend exec playwright test --project=full
+PLAYWRIGHT_MODE=demo pnpm --filter bhtune-frontend exec playwright test --project=demo
+```
+
+Demo also needs `openssl` for its isolated loopback HTTPS certificate. `run test:e2e` without `PLAYWRIGHT_MODE` runs both projects and starts their own isolated servers. Shared OPC helpers are in `frontend/e2e/support/opcBrowser.ts`.
 
 ### Windows native OPC DA smoke
 
-The serial native smoke uses the real CLI and the official x86 gateway pinned in
-`installer/windows/opcda-gateway-release.json`. Its unpublished COM DLL exposes only the
-synthetic `ByteHound.BHTuneOpcDaSmoke.1` server. It covers read-only `check` without creating a
-database, native paged browse and session closure, one manual index and exact indexed searches,
-then one Yokogawa-template temperature/PID tune, Moderate write-back, and restoration.
-CLI and Web share the native driver backend; React rendering remains covered by Playwright.
-Preflight needs `OPC.ServerList.1`: the runner preserves an existing OPCEnum, or registers a
-test-only `IOPCServerList`/`IEnumGUID` catalog from the same fixture DLL when neither registry
-hive has that ProgID. The catalog reports only the synthetic DA2 class. The server's owned
-CLSID includes its OPC DA 2.0 category for discovery by a real OPCEnum. This bootstrap does not
-validate real OPCEnum, actual CENTUM firmware, remote DCOM, or site permissions.
+Use only a disposable plant-free Windows host. The serial smoke runs the real CLI, installer-pinned verified official x86 gateway, and unpublished synthetic `ByteHound.BHTuneOpcDaSmoke.1` COM fixture. It covers read-only preflight without DB creation, paged browse/session close, a manual index, and a Yokogawa temperature/PID tune with Moderate write-back and restoration. It does not validate CENTUM firmware/site permissions, real OPCEnum implementation, remote DCOM, or React rendering.
 
-Use PowerShell 7.4 or later on a disposable, plant-free Windows test host. Install Rustup,
-Visual C++ x86 build tools, `protoc`, GitHub CLI, Cosign, and `cargo-deny`; public release
-verification needs no private credentials. The fixture requires the explicit MSVC toolchain
-below; the ordinary BHTune toolchain, including the GNU toolchain on `win`, is unchanged.
+Preflight needs `OPC.ServerList.1`: preserve any real OPCEnum; add the fixture's test catalog only when absent from both hives. Refuse existing 32-bit COM-class collisions. Default User registration requires non-elevated UAC; real OPCEnum may require machine-scoped fixture categories. Machine scope must be explicitly selected on a disposable host, never automatic elevation/fallback.
 
-COM registration defaults to `User`, requiring a non-elevated shell with UAC enabled.
-Creating/removing the scoped firewall rule independently requires local administrator
-permissions. For local reproduction, explicitly select `Machine` from an administrator shell
-on the disposable host as below; the runner never elevates or falls back automatically.
-An existing real OPCEnum also requires machine-scoped fixture categories because it may not
-see HKCU classes. Real discovery registrations are never replaced or removed.
+Use PowerShell >= 7.4, Rustup, Visual C++ x86 tools, `protoc`, gh, Cosign, and cargo-deny. Firewall creation/removal independently requires administrator permission. Explicit Machine-scope local reproduction:
 
 ```powershell
 rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt --component clippy --target i686-pc-windows-msvc
@@ -276,70 +102,37 @@ cargo deny --manifest-path tests/opcda-yokogawa-fixture/Cargo.toml --target i686
 pwsh -NoProfile -File scripts/test-opcda-yokogawa.ps1 -RegistrationScope Machine -ArtifactsDirectory target/opcda-yokogawa-smoke
 ```
 
-The runner first runs the four standalone tests serially (two model and two native COM
-vtable/state/enumerator checks), then builds the DLL. It refuses collisions in either 32-bit
-COM registry hive, registers
-only its owned fixture keys, and starts an owned foreground gateway on an unused high port.
-The client endpoint is loopback; the pinned gateway binds a wildcard listener. With the
-firewall enabled, the runner creates and verifies one inbound-block rule for the exact staged
-gateway executable, then removes only that owned rule after stopping the processes.
-Local reproduction fails if every firewall profile is not enabled or that protection cannot
-be established. Disposable GitHub-hosted CI may use its plant-free VM boundary when firewall
-profiles are disabled; evidence records that fact without enabling them. Port `7600`,
-services, installed gateways, production namespaces, and global firewall/UAC/DCOM policy
-are untouched.
+The runner tests model/COM components serially before building the DLL; ordinary GNU BHTune tooling is unchanged. Root workspace commands do not cover fixture gates and leave the native integration test ignored.
 
-Native process trees have finite deadlines and Windows job-object cleanup. The runner restores
-its environment and verifies ownership before removing COM keys, the firewall rule, and
-scratch state in `finally`.
-Evidence in unique `run-*` directories contains source/toolchain/hash/PID metadata, bounded
-logs, phase outputs, the write audit, and database snapshots taken after the owned processes
-stop, plus the discovery provider and firewall boundary. CI uploads that evidence on failure.
-Ordinary `cargo test --workspace` leaves the native integration test ignored; root coverage
-still requires 100% of canonical product-source lines.
+Use an owned foreground gateway on an unused high port, never port 7600, services, installed gateways, or plant namespaces. Its listener is wildcard although the client is loopback: local runs require enabled firewall profiles and an enforced owned executable inbound-block rule. Disposable hosted CI may record its disabled-firewall plant-free VM boundary without changing global policy.
+
+Finite deadlines/job objects and ownership-checked `finally` cleanup protect processes, COM keys, firewall, and scratch state; retain firewall protection on unresolved process-stop failure. Preserve environment and global UAC/DCOM/firewall policy. Unique `run-*` evidence includes source/toolchain/hash/PID metadata, bounded logs/phase outputs, audit, discovery/firewall boundary, and DB snapshots copied after owned processes stop. CI uploads failure evidence. [Testing design](docs/internal/design/testing.md#native-windows-opc-da-smoke) covers runner checks and limitations.
 
 ## CI
 
-Rust PRs must pass `cargo fmt --check --all`,
-`RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps`,
-`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-`cargo test --workspace`, `cargo deny check`, `cargo machete`, and a check that the generated
-OpenAPI spec (`openapi.json`) and CLI reference
-(`docs/reference/cli.md`, `man/`, `completions/`) are up to date before merge — run `cargo
-run -p bhtune-server --example gen_openapi` and `cargo run -p bhtune --example gen_docs
---features schemars` and commit the result after changing an HTTP route/DTO or a `clap`
-argument, respectively. The package job runs `cargo package --workspace --locked
---no-verify` to validate that every release archive can be assembled. Tarball verification
-is deliberately skipped there because Cargo removes local paths and resolves same-version
-workspace dependencies from crates.io, which cannot compile coordinated unpublished API
-changes; the workspace build, Clippy, and test jobs compile the real local dependency graph.
-PRs touching `frontend/` must additionally pass `pnpm run
-check:licenses`, a check that the generated OpenAPI TS client (`frontend/src/api/schema.d.ts`)
-is up to date, `pnpm --filter bhtune-frontend run test`, `run format:check`, `run lint`, and
-`run build` (which also typechecks `frontend/e2e/`). `.github/workflows/e2e.yml` runs the Playwright
-suite above in CI on every push/PR, uploading the HTML report as an artifact if it fails. PRs
-touching `docs/` or `website/` must pass `pnpm --filter bhtune-website run format:check`,
-`run lint`, `run typecheck`, and `run build` — the build step doubles as a broken-link/anchor
-check across `docs/`, since Docusaurus fails the build rather than shipping a dead link or
-a heading reference that no longer exists. Knip runs as the required `Knip dead-code analysis`
-status for changes affecting the pnpm workspaces, their dependency metadata, or its configuration.
+Run the smallest affected check first, then every applicable gate. Source/version definitions, package scripts, `justfile`, and workflows are authoritative:
 
-The existing required Windows validation job also runs the standalone native fixture gates and
-the native OPC DA smoke. Fixture, runner, and gateway-contract/validator changes trigger that
-job; it is not an optional check.
+| Area                 | Commands                                                                                                                                                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Rust                 | `cargo fmt --all --check`; `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps`; `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`; `cargo test --workspace --locked`; `cargo deny check`; `cargo machete`; `cargo build --workspace --locked` |
+| Coverage             | `cargo llvm-cov --workspace --locked --lcov --output-path lcov.info`                                                                                                                                                                                                                 |
+| Generated references | `cargo run --locked -p bhtune-server --example gen_openapi`; `cargo run --locked -p bhtune --example gen_docs --features schemars`; `pnpm --filter bhtune-frontend run generate:api`; review/commit source-required output                                                           |
+| Frontend             | `pnpm --filter bhtune-frontend run format:check`; `run lint`; `run test`; `run build` (typechecks SPA and E2E)                                                                                                                                                                       |
+| Documentation site   | `pnpm --filter bhtune-website run format:check`; `run lint`; `run typecheck`; `run build` (broken links/anchors are errors)                                                                                                                                                          |
+| pnpm policy          | `pnpm run check:licenses`; `pnpm run check:dead-code`                                                                                                                                                                                                                                |
+| Packages             | `cargo package --workspace --locked --no-verify`; applicable AUR/installer/package acceptance                                                                                                                                                                                        |
 
-SonarQube runs as a separate `Required Sonar quality status` check for relevant changes; its
-quality-gate result is blocking when analysis runs, while documentation-only and fork pull
-requests receive an explicit successful skip status. Applicable PR analyses must also report zero
-`OPEN`/`CONFIRMED` issues; Accepted and False Positive findings require a documented rationale
-and a link to the related pull request or documentation.
+Regeneration/drift gates remain; there is no OpenAPI base-branch breaking-comparison job. Review API contract changes and regenerate OpenAPI/TS together. Package `--no-verify` avoids registry resolution of coordinated unpublished APIs; workspace build/Clippy/tests validate the actual local graph.
+
+Windows validation includes separate fixture gates and native smoke when source/runner/contract changes affect it. Browser checks use the Full/Demo projects above; screenshot CI rebuilds real assets. Documentation-only changes need authored Markdown and website gates, not Rust tests. Workflow changes require actionlint.
+
+Sonar runs relevant same-repository PR/main changes and scheduled scans; docs-only/fork analyses explicitly skip. Require zero `OPEN`/`CONFIRMED` issues for applicable analysis, not just a badge. Maintainers read `SONAR_TOKEN` from ignored `.env`, restored with `rbw unlock && rbw sync && ds sync`; never print/commit it. Legitimate Accepted/False Positive findings require evidence and a linked rationale.
+
+Keep required statuses named `Required validation status`, `Required coverage status`, `Required E2E status`, and `Required Sonar quality status`. Repair failed checks on the same branch; keep the base current before an approved merge.
 
 ### Packaging validation
 
-Packaging changes must keep generated artifacts and disposable package workspaces outside the
-repository. The AUR generator is metadata-only: it does not compile Rust or frontend code,
-contact AUR, or publish anything. Run its network-free regression suite and shell checks before
-opening a packaging pull request:
+Keep generated artifacts/disposable workspaces outside Git. AUR generation is metadata-only, network-free in its regression suite, and never compiles/publishes. Run from repository root:
 
 ```sh
 python3 scripts/aurpkg_test.py
@@ -347,63 +140,25 @@ shellcheck scripts/aurpkg
 shfmt -d scripts/aurpkg
 ```
 
-Use a disposable Arch environment and a non-root build user for `makepkg --verifysource`,
-package installation, upgrade, removal, and service-state checks. Generate `.SRCINFO` with
-`makepkg --printsrcinfo`; never hand-edit it. Publication is intentionally separate from pull
-request validation, requires an exact stable `vX.Y.Z` tag and independently verified release
-evidence, and remains a manual first-release action until the post-release AUR commit has been
-verified. The reusable Arch job feeds its validation script to `docker run -i` and writes
-machine-readable evidence through the host-mounted `aur-evidence/` directory; preserve both
-invariants when changing that workflow. The regression suite must run with the repository root
-as its working directory because its ancillary-file inventory intentionally uses repository-
-relative paths.
-Package-content assertions use archive-relative paths and accept either `bsdtar`
-leading-path convention (`usr/...` or `./usr/...`).
+Use disposable Arch/non-root `makepkg` for source verification, `.SRCINFO` generation, and install/upgrade/removal/service checks. Never hand-edit `.SRCINFO`. Publication requires exact stable tags and independently verified release evidence; first publication is manual until the remote commit is verified. Preserve `docker run -i` script input and host-mounted `aur-evidence/`; archive assertions accept `usr/...` and `./usr/...`.
 
-Debian packages use adaptive `depends = "$auto"` metadata and therefore require
-`dpkg-shlibdeps` in the packaging environment. Do not hard-code a dependency list to compensate
-for an incomplete local package build. Keep `.github/workflows/release.yml` unchanged when
-working on reusable installer or AUR validation/publication workflows; release integration is a
-separate coordination task.
+Debian `depends = "$auto"` needs `dpkg-shlibdeps`, not a hard-coded fallback list. Keep paired binaries and every distribution channel: archives, deb/rpm, AUR, Docker, NSIS, launchd/Homebrew. Do not change `release.yml` during reusable installer/AUR work; integration is coordinated separately. See [packaging architecture](docs/architecture/packaging.md) and [release verification](docs/guides/release-verification.md).
 
 ## Security and compatibility checks
 
-Report suspected vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md), never
-in public issues, discussions, or pull requests.
+Report vulnerabilities privately via [SECURITY.md](SECURITY.md). CodeQL, Semgrep, full-history Gitleaks, actionlint, and zizmor are repository gates. Keep least-privilege permissions and immutable Action SHA pins; never use `pull_request_target` to obtain fork secrets.
 
-Security workflows run CodeQL, Semgrep, full-history Gitleaks, actionlint, and zizmor. Keep
-workflow permissions least-privilege and do not replace `pull_request` with
-`pull_request_target` to obtain secrets for forked contributions.
-All referenced GitHub Actions are pinned to immutable commit SHAs; Dependabot updates those
-pins through the configured `github-actions` ecosystem.
-
-Parser changes should include both a focused property test and, where the input boundary is
-externally reachable, a `fuzz/` target. OpenAPI changes must regenerate `openapi.json` and the
-frontend API schema; CI checks for generated-reference drift, while API compatibility requires
-review against the existing contract. Database changes must include a representative upgrade
-test when they alter an existing schema.
-
-Release tags publish checksums, a CycloneDX SBOM, Sigstore blob-signature bundles, and GitHub
-artifact provenance. Do not add release artifacts that bypass those steps.
+Parser changes need focused property tests and an externally reachable boundary's fuzz target. API changes need reviewed contracts and regenerated outputs; DB changes need representative schema/upgrade tests. Release assets must retain checksums, CycloneDX SBOM, Sigstore bundles, and GitHub provenance.
 
 ## Documentation
 
-A documentation update is part of a PR's definition of done whenever it changes user-visible
-behavior — a new CLI flag, config key, HTTP endpoint, default value, or safety rule. Update
-whichever of `README.md`, `AGENTS.md`, and `docs/` describes the area you're changing; see
-"Documentation contract" in `AGENTS.md` for the full policy. If you use Copilot CLI against
-this repo, `.github/hooks/docs-drift.json` prints a one-line reminder at the end of a session
-that changed `crates/**` or user-visible `frontend/src/**` without touching any documentation
-surface — a safety net, not a substitute for doing this deliberately.
+User-visible behavior/default/config/API/safety changes require README, relevant guides, generated references, and AGENTS invariant updates as applicable. Follow [Documentation contract](AGENTS.md#documentation-contract). The paired [docs-drift hook](.github/hooks/README.md) warns about committed/uncommitted implementation changes without a documentation surface; it does not replace deliberate updates.
+
+Generated CLI/config references, OpenAPI, TS schema, man pages, and completions must not be hand-edited/formatted. Other reference pages are authored; the CI docs agent still cannot edit `docs/reference/**` or AGENTS. User-facing prose describes enduring behavior, not a change log.
 
 ### Web UI screenshots
 
-The browser documentation uses deterministic Playwright screenshots generated from the real
-Full and Demo SPA. Screenshot PNGs are generated assets and must never be committed to Git.
-The text-only lock at `docs/reference/web-ui-screenshots.json` records scenario coverage,
-dimensions, hashes, and Pages URLs.
-
-Run the capture and lock update after a UI change:
+Full/Demo captures use deterministic Playwright against the real SPA. PNGs never enter Git; `docs/reference/web-ui-screenshots.json` is the workflow-owned text lock of scenarios/dimensions/hashes/Pages URLs.
 
 ```sh
 pnpm docs:screenshots
@@ -411,82 +166,28 @@ pnpm docs:screenshots:validate
 pnpm docs:screenshots:gallery
 ```
 
-`docs:screenshots` runs the Full and Demo capture suites serially, updates the text lock, and
-creates the local review gallery at `frontend/test-results/docs-screenshots/index.html`.
-`docs:screenshots:check` regenerates candidates without changing the lock and fails when the
-canonical screenshots drift. The generated Pages directory is ignored locally; the Pages
-deployment workflow recreates it from the merged commit.
+Capture runs serially, updates the lock, and creates `frontend/test-results/docs-screenshots/index.html`; `docs:screenshots:check` compares candidates without changing it. Pages regenerates ignored image assets from the merged commit. Do not rewrite locks merely for local rendering differences.
 
-The validator also compares every static `documentationId`/`data-doc-section` marker in
-`frontend/src/` with the manifest, so a newly marked UI section fails validation until it has
-an associated screenshot scenario.
-
-Add a new scenario when a new route, major section, modal, or safety-relevant state is not
-clearly represented by an existing capture. Give the image meaningful alt text and a caption,
-keep all operational instructions in prose, and link the screenshot to its full-size Pages URL.
-The viewport stays fixed for deterministic layout; use `capture: "content-fit"` for short pages
-whose rendered content does not fill the viewport. Its height is computed automatically from the
-shared content root, so do not add per-page screenshot heights.
+Validation maps static `documentationId`/`data-doc-section` markers to scenarios. Add captures for uncovered routes/sections/modals/safety states; supply meaningful alt text, captions, full-size links, and complete prose instructions. Keep the fixed viewport; short pages use `capture: "content-fit"` with shared automatic sizing, not per-page heights.
 
 ## Pull requests
 
-- Keep PRs small and focused — one logical change each.
-- Describe what changed and why; link an issue if one exists.
-- Include the targeted validation performed and any manual verification needed for the change.
-- After every applicable required check, the CLA check, and the applicable SonarQube zero-issue
-  check pass, queue the built-in GitHub squash auto-merge with
-  `gh pr merge <PR> --auto --squash --delete-branch` and confirm that the PR reaches `MERGED`.
-  Do not use `NOSONAR` or a dashboard status change to hide a real unresolved code issue.
+- One logical change; describe why, link existing issues, and use the repository PR template.
+- Record exact validation commands with results and any outstanding manual review. Inspect status/staged diff; stage only intended files, never build outputs or secrets.
+- Wait for applicable required, CLA, and zero-issue Sonar checks plus explicit maintainer review/testing approval. Then use protected squash merge and delete only the task branch; never queue an unreviewed auto-merge or hide findings.
 
 ## Contributing a DCS/PLC template
 
-Adding support for a control system BHTune doesn't already know about is a data file
-change, not a Rust change — no code, no rebuild logic, just a `[[template]]` block in
-[`crates/bhtune-core/templates/builtin.toml`](crates/bhtune-core/templates/builtin.toml).
-This is one of the easiest ways to contribute, and it's one we'd especially like to see:
-the goal is a community-maintained library covering as many DCS/PLC systems as possible.
+Add a `[[template]]` entry to [builtin.toml](crates/bhtune-core/templates/builtin.toml), following the [field reference/worked example](docs/dcs-templates.md). Copy a close entry or export one with `bhtune template export <name> out.toml --format toml`, then supply every suffix/raw mode/precision field and vendor-version list.
 
-See [`docs/dcs-templates.md`](docs/dcs-templates.md) for the full field-by-field reference
-and a worked example. In short:
-
-- Copy the closest existing `[[template]]` block as a starting point, or generate one from
-  a template you've already built with `bhtune template export <name> out.toml --format toml`.
-- Fill in every tag suffix, the raw mode values, and a `versions` list naming the
-  release(s) you're targeting, in that vendor's own version-naming convention.
-- If a newer release of a vendor you've already contributed changes its tag conventions,
-  add a **new** `[[template]]` entry with its own `name` — never edit an existing entry's
-  suffixes in place, since sites on the older release still depend on the mapping as
-  written.
-- A unit test parses and validates the entire embedded catalog on every CI run, so a
-  malformed or incomplete contribution fails the build rather than merging silently broken.
+Changed vendor conventions need a new uniquely named entry, not edits that break sites using the old mapping. Embedded-catalog tests parse/validate every entry.
 
 ## Releases and changelogs
 
-Use [Conventional Commits](https://www.conventionalcommits.org/) for every commit. Release-worthy
-types are `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, and `revert`;
-release-preparation commits and generic `chore` commits do not create product release content.
-Scopes are optional, but a specific scope such as `core`, `driver`, `db`, `cli`, or `server` makes
-the root changelog easier to review.
+Root [CHANGELOG.md](CHANGELOG.md) covers all six product crates; unpublished test support/COM fixtures are not release artifacts. Contributors describe behavior in commits/docs, not hand-edited release versions. `release-plz` owns the versioned entry and `bhtune` product tag; only `release.yml` creates GitHub Releases/assets. The release policy is git-only, not crates.io publication.
 
-The root [`CHANGELOG.md`](CHANGELOG.md) is the single product changelog for the five product
-workspace crates. The unpublished `bhtune-test-support` crate is not a release package.
-Contributors should describe user-visible changes in commits and update the relevant
-documentation, but should not hand-edit release version entries or workspace version numbers.
-`release-plz` generates the release preparation commit and owns the versioned changelog entry
-when the release process is activated.
-
-Releases use a single product tag cut from `main`; there are no release branches. `bhtune`
-owns the product tag and release version, while `.github/workflows/release.yml` alone creates the
-GitHub Release and uploads artifacts. The current policy is git-only: BHTune crates are not
-published to crates.io. Release automation is guarded by the
-`RELEASE_AUTOMATION_ENABLED` repository variable and remains disabled until an approved RC has
-passed the hosted canary and the maintainer activation gates are complete.
-
-Maintainers must follow the [release automation guide](docs/guides/releasing.md), including the
-first-release baseline, documentation-snapshot rules, rate-limit guard, and partial-failure
-recovery procedure.
+Keep `RELEASE_AUTOMATION_ENABLED` disabled until an explicitly approved RC/canary and activation gates pass. Follow the [release guide](docs/guides/releasing.md) for baseline, snapshot, rate-limit, approval, and failure-recovery rules. No release, tag, publication, or deployment is implicit in a feature PR.
 
 ## License
 
-By contributing, you agree your contributions are licensed under the project's [AGPL-3.0-or-later
-license](LICENSE), subject to the terms of the [CLA](CLA.md) you sign.
+Contributions use [AGPL-3.0-or-later](LICENSE), subject to the signed [CLA](CLA.md).

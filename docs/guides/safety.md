@@ -10,7 +10,8 @@ you point BHTune at a real process.
 ## Cancellation
 
 Pressing Ctrl+C during a `bhtune tune`/`bhtune simulate` run (or clicking **Cancel** on the web
-GUI's run detail screen, which triggers the same code path) is always safe:
+GUI's run detail screen, which triggers the same code path) requests cancellation and
+best-effort restoration. It does not guarantee that the controller has been restored:
 
 - **First Ctrl+C** stops polling immediately and starts the restore (see
   [Restoration](#restoration) below). It works no matter when it's pressed — including mid-read
@@ -265,9 +266,9 @@ Every OPC DA read reports a quality alongside its value (`Good`/`Uncertain`/`Bad
 always accepts `Good`, accepts `Uncertain` by default, and never accepts `Bad` for tuning-critical
 operations:
 
-- **Before the loop is touched** (initial PV/MV/range/mode/direction reads): any non-`Good`
+- **Before the loop is touched** (initial PV/MV/range/mode/direction reads): a `Bad` or policy-rejected `Uncertain`
   reading is a hard failure. Nothing has been mutated yet, so this is a clean refusal.
-- **During the test** (every polled PV sample): a non-`Good` sample aborts the run and restores
+- **During the test** (every polled PV sample): a `Bad` or policy-rejected `Uncertain` sample aborts the run and attempts to restore
   the loop. A held or stale PV during a relay half-cycle would corrupt the exact period
   measurement the test depends on — silently tolerating it is worse than aborting loudly. The
   triggering sample is still recorded (with its real quality) before the abort.
@@ -275,7 +276,7 @@ operations:
   immediately prove failure. Confirmation remains pending and is retried until the four-second
   deadline; if the engine needs the next relay command first, the run aborts without issuing that
   replacement.
-- **During write-back confirmation**: a non-`Good` readback is treated as an unconfirmed write,
+- **During write-back confirmation**: a `Bad` or policy-rejected `Uncertain` readback is treated as an unconfirmed write,
   which triggers rollback (see [PID write-back](#pid-write-back) below).
 - **When selecting a tag in the web browser**: BHTune re-reads the exact item selected in the
   tree before applying the template's PV suffix. `Good` quality proceeds normally; `Uncertain`
@@ -350,10 +351,11 @@ sweep.
 
 ## PID write-back
 
-Requesting `--write-pid <level>` (or the Automatic PID settings section of the New tune form) is the only
-part of a tune that writes tuning constants rather than just testing the loop, and it's the only
-part that requires `--yes` — an explicit, deliberate confirmation that no human needs to
-approve it interactively. BHTune:
+Omitting `--write-pid` does not make a live MRFT read-only: it still changes mode and commands
+MV relay steps. Use `bhtune check` or Full mode's **Check readiness** for a read-only preflight.
+The CLI requires `--yes` with `--write-pid <level>` on every tune path, including interactive use;
+that flag confirms unattended PID write-back. The Web UI requires its explicit review/confirmation.
+Completed OPC runs can also review/write results after the tune. BHTune:
 
 1. **Reads and persists the current P/I/D values first**, before writing anything. If this
    pre-read fails, nothing is written at all.
@@ -498,9 +500,10 @@ pair, then start the service and verify `/api/health` before considering the rec
 The [operator runbook](operator-runbook.md#12-incident-response) lists the evidence to collect and
 the bounded recovery sequence.
 
-The frontend development server is also unauthenticated. It binds all local interfaces so a
-trusted host can use `http://asus:5173`, and proxies browser API requests to the local
-`bhtune-server`; use this development-only path only on the same trusted network.
+The frontend development server is also unauthenticated and binds all local interfaces.
+Use its loopback URL on a trusted development host; other hostnames require Vite's host allowance
+and the exact browser origin. It proxies API requests to local `bhtune-server`; see
+[development setup](../getting-started/web-gui-quickstart.md#frontend-development-mode).
 
 ## Scripting and exit codes
 
@@ -516,9 +519,10 @@ are equally specific:
 | `2`  | Aborted by Ctrl+C, restore confirmed                                                     |
 | `3`  | Test completed, but the requested PID write-back failed                                  |
 | `4`  | `[tuning].timeout_secs` elapsed before the test finished                                 |
-| `5`  | A non-`Good` OPC sample aborted the run                                                  |
+| `5`  | `Bad` or policy-rejected `Uncertain` quality aborted the run, with restore confirmed     |
 | `6`  | The post-run restore could not be confirmed — check the loop by hand                     |
 | `7`  | An accepted OPC DA MV command could not be confirmed; restore was confirmed              |
+| `8`  | A preflight check failed, or `check --strict` rejected a warning                         |
 
 Exit code `6` takes precedence over `7` if the actuation failure is followed by an incomplete
 restore.

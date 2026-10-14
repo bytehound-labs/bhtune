@@ -1,283 +1,165 @@
 # bhtune
 
-Agent contract for this repository. It states the current architecture, invariants, commands, and safety rules. Durable rationale lives in [`docs/internal/design/`](docs/internal/design/README.md). Code and tests are authoritative if they disagree with either document. Do not grow this file back into a phase diary.
+Agent contract: architecture, invariants, commands, and safety rules. Code and tests are authoritative. Read the relevant [design note](docs/internal/design/README.md) before changing its area; keep rationale there, not in a phase diary here.
 
 ## Summary
 
-BHTune is an open-source Rust PID auto-tuner for industrial DCS/PLC systems. It runs a Modified Relay Feedback Test (MRFT) against one loop and can calculate and write back PID constants. v1 adapters are the `bhtune` CLI and the browser GUI served by `bhtune-server`. There is no desktop app.
+BHTune is an AGPL-3.0-or-later Rust PID auto-tuner for industrial DCS/PLC loops, with the [CLA](CLA.md). v1 is one-loop MRFT through the `bhtune` CLI or browser GUI served by `bhtune-server`, plus an in-process simulator and validation-only replay. There is no desktop app.
 
-OPC DA I/O uses the published `opcda-bridge` 0.6 crates.io dependency and a separate Windows gateway. Product crates have no Windows/COM dependency. The unpublished native smoke fixture is a separate test-only x86 COM workspace. The MRFT engine is a pure, clock-free state machine. Dependencies are open source and enforced in CI. The license is AGPL-3.0-or-later with the CLA in [`CLA.md`](CLA.md).
+OPC DA uses the published `opcda-bridge` 0.6 crates.io dependency and a separate Windows gateway. Product OPC I/O is COM-free; Windows service support stays platform-gated. The native COM smoke fixture is test-only. Dependencies must be open source.
 
-v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only replay driver. OPC UA, Modbus, Step Test, multi-loop batch tuning, and a built-in scheduler are roadmap items in [`docs/roadmap.md`](docs/roadmap.md), not v1 work. Step Test stays blocked on a live subscription RPC in `opcda-bridge`. Scheduled tuning is an external scheduler invoking the CLI.
+OPC UA, Modbus, Step Test, batch tuning, and a built-in scheduler remain [roadmap](docs/roadmap.md) work. Step Test requires a live subscription RPC from the bridge; scheduled tuning uses an external scheduler invoking the CLI.
 
-`win` is the Windows build and manual-verification host. Keep the checkout at `C:\git\bhtune`. Ordinary BHTune builds use `stable-x86_64-pc-windows-gnu`, MinGW-w64, and `protoc`; they do not need MSVC. Yokogawa read validation defaults to `yok3` unless the user names another station. Before a read, run only `StopSebol.get_online_controllers()`. Do not call `StopSebol.run()` or `stop-sebol`. Read one tag from a reported-online controller. Do not write, tune, or refresh a namespace as part of that check.
+Windows build/manual verification uses `win`, checkout `C:\git\bhtune`, and ordinarily `stable-x86_64-pc-windows-gnu`, MinGW-w64, and `protoc`, not MSVC. Use CLI/SSH only. Yokogawa read validation defaults to `yok3` unless another station is requested: run only `StopSebol.get_online_controllers()`, never `StopSebol.run()` or `stop-sebol`, then read one exact browsed/mapped ItemID from a reported-online controller. Do not write, tune, or refresh a namespace.
 
 ## Crate map
 
-| Path                            | Responsibility                                                                                                                                                                                                                                                      |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bhtune-core`                   | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads.                                                                                                                                                           |
-| `bhtune-driver`                 | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                                                                                             |
-| `bhtune-db`                     | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                                                                                            |
-| `bhtune-runtime`                | Shared configuration, database bootstrap, logging, retention, driver setup, tune orchestration and safety, live ownership/recovery, history writes/reverts, and export serialization. Its source and direct dependencies contain no CLI, HTTP, or OpenAPI concerns. |
-| `bhtune`                        | CLI adapter package (`bhtune_cli` Rust library and `bhtune` binary); terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`.                                                            |
-| `bhtune-server`                 | Axum HTTP/OpenAPI adapter and embedded React SPA; shared application work goes through `bhtune-runtime`, not the CLI.                                                                                                                                               |
-| `bhtune-test-support`           | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not.                                                                             |
-| `frontend/`                     | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                                                                                                        |
-| `website/`                      | Docusaurus site. Its docs plugin reads repo-root `docs/` and excludes `docs/internal/**`.                                                                                                                                                                           |
-| `fuzz/`                         | Separate Cargo workspace for parser fuzz targets. Not a product-workspace member.                                                                                                                                                                                   |
-| `tests/opcda-yokogawa-fixture/` | Unpublished standalone x86 OPC DA COM DLL for plant-free Windows CLI smoke testing. Never a product dependency or release artifact.                                                                                                                                 |
+| Path                                     | Responsibility                                                                                        |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `crates/bhtune-core`                     | Pure model, MRFT, math, embedded templates; no I/O, async, or clock reads.                            |
+| `crates/bhtune-driver`                   | Driver trait, OPC DA, FOPDT simulator, replay; sole production bridge dependency.                     |
+| `crates/bhtune-db`                       | SQLite schema, migrations, templates, history, backup/restore, retention.                             |
+| `crates/bhtune-runtime`                  | Shared configuration, bootstrap, logging, drivers, tune/safety/recovery, history operations, exports. |
+| `crates/bhtune-cli`                      | Package/binary `bhtune`, library `bhtune_cli`; terminal adapter and generated CLI references.         |
+| `crates/bhtune-server`                   | Axum/OpenAPI adapter and React SPA; peer of the CLI, not its consumer.                                |
+| `crates/bhtune-test-support`             | Unpublished mock gRPC bridge, never a product/release artifact.                                       |
+| `frontend/`, `website/`                  | React/TypeScript/Vite/Tailwind SPA with uPlot; Docusaurus reads `docs/`, excluding `internal/**`.     |
+| `fuzz/`, `tests/opcda-yokogawa-fixture/` | Separate test-only Cargo workspaces, outside product membership.                                      |
 
-The server package and `[[bin]]` are both named `bhtune-server`, so tests must use `env!("CARGO_BIN_EXE_bhtune-server")`. The CLI binary is `bhtune` (`CARGO_BIN_EXE_bhtune`).
+Binary tests use `CARGO_BIN_EXE_bhtune` or `CARGO_BIN_EXE_bhtune-server`, matching the actual binary names. The empty `mock-driver` feature is a cycle guard: CLI/server enable it; `bhtune-driver` must not.
 
 ## Invariants
 
-- `bhtune-core` is a pure `step` state machine. `chrono` `clock` and `now` stay disabled workspace-wide, so `Utc::now()` cannot compile there. Callers supply tick time.
-- Tuning math uses `f32`. Simulator MRFT time advances by the configured poll interval. Live OPC DA time is monotonic elapsed time projected onto the run's UTC start, captured after a successful PV read. A live driver's timestamp is never engine time. Replay is the narrow exception: its recorded timestamp is the trace.
-- `Driver` does not depend on `bhtune-core`. Tag values stay strings. A rejected write is `Ok(WriteOutcome)`, not `DriverError`. Connect, operation, and unsupported failures stay distinct.
-- `OpcDaDriver` uses `tokio::sync::Mutex` because the client guard crosses `.await`. `SimulatorDriver` uses `std::sync::Mutex` because it does not hold the guard across `.await`. Do not unify them.
-- OPC DA quality is an exact `Good` or `Uncertain` match. Every other quality string is `Bad`. OPC DA `TagValue.timestamp` is always `None`.
-- Browse uses gateway-owned sessions, opaque node keys, and page tokens. Never split `.`, `!`, or `/` to infer hierarchy. Indexed search is optional. Simulator and replay browse/search return `Unsupported`.
-- Closing Browse acknowledges only displayed terminal index-error notices for the exact bridge/server on the New Tune page. Preserve raw status, cache, diagnostics, and search availability. Later attempts and accepted/observed builds re-arm notices; errors hidden by another panel or arriving after close remain unacknowledged. No browser-storage persistence.
-- `opcda-bridge` stays a crates.io dependency local to `bhtune-driver`. Published and packaged builds must not use a git dependency or a path override.
-- Native OPC DA smoke uses only the synthetic fixture and the official gateway pinned by the installer contract. Never register it over existing HKCU/HKLM classes, use production port `7600`, start a service, or contact plant equipment. Preserve real OPCEnum; register the fixture's unique `OPC.ServerList.1` discovery shim only when absent from both hives. User scope is the default; Machine scope requires explicit selection on a disposable test host. The gateway listener is wildcard, not loopback: protect its exact staged executable with an owned inbound firewall block, or record a disabled-firewall disposable hosted-CI boundary. Ownership-checked COM/process/firewall cleanup and isolated evidence are mandatory.
-- `bhtune-runtime` owns application services shared by the CLI and server. Keep direct `clap`, HTTP-framework, and OpenAPI dependencies and types in their respective adapters; transport crates may appear transitively through the OPC DA gRPC client.
-- CLI `TuneArgs` and HTTP `StartRunRequest` convert to runtime-owned `ValidatedTuneRequest` before preparation. Keep shared simulator defaults and common finite/positive/tag-override checks in the runtime; Demo-specific restrictions remain an additional server policy.
-- `bhtune check` and Full-mode `POST /api/runs/preflight` use the shared runtime preflight and `ReadOnlyDriver`. The CLI dispatches before `db::open` and queries persisted templates only through `db::open_read_only`; the server endpoint uses its read-only template pool. Neither may create run history, start tune work, write tags, restore a loop, refresh a namespace, or otherwise mutate database/controller state. Demo mode does not mount the HTTP route. A passing write-back-readiness result proves only that P/I/D tags are configured and readable and any template-specific prerequisites are met; it cannot prove write permission.
-- SQLite is plain and unencrypted. Flatten stable filterable fields. Keep nested evolving values in `json_valid` JSON. `tune_results` and `tune_writes` stay separate tables.
-- The pre-v0.1 schema is one embedded baseline. Before migration or read-only use, `connect()` and `connect_read_only()` reject any SQLx migration history version/checksum not in the embedded set. Preserve a verified backup of earlier pre-release databases and use a new file; never rewrite `_sqlx_migrations` or automatically delete an old database. After v0.1, use forward migrations.
-- Enum columns reuse serde snake_case. Matching `CHECK` constraints use the same literals.
-- Startup re-upserts `builtin` and `catalog` templates and never overwrites a row with a different `origin`. `user` rows are never auto-edited.
-- Each run snapshots its template, tags, submitted request, and OPC connection before driver mutation. `history revert` trusts that recorded connection. An explicit flag is a cross-check, not an override.
-- Every live mutation and recovery holds the canonical database's OS-level exclusive guard plus a conditional database claim keyed by database and controller/MV resource identity. The owner heartbeats independently every 5 seconds. A stale heartbeat, PID, file presence, or in-memory server registry alone never proves that recovery is safe; a paused live owner holding the OS guard blocks recovery.
-- Full-mode startup exports evidence before marking verified orphaned owned `running` tunes failed and setting explicit recovery eligibility; it never contacts the controller. Eligibility requires complete structured ownership, provenance, restore intent, and mutation evidence; legacy/incomplete rows fail closed. Demo startup bypasses live-owner recovery.
-- `bhtune restore-loop <run-id> --yes` is the explicit live recovery path. It uses the recorded connection and policy; supplied connection flags are cross-checks only. The command reports every restore step, and it never reports success if restoration or required audit persistence is incomplete.
-- If follow-up provenance persistence fails, `prepare()` marks the owned row failed, or deletes it if that update cannot be stored. Do not leave a permanent `Running` row.
-- Production persistence uses `calculate_all_checked`. Invalid results store null numbers and cannot be written. MRFT uses the fixed clamp, full elapsed-time period, and switch-sample result-extrema behavior listed below.
-- Each template explicitly defines `pid_rounding`: 0-7 decimal places or 1-7 significant digits, shared by P/I/D. Yokogawa defaults to one decimal; the other built-ins and new custom templates use three significant digits. The runtime's controller-target gate applies it after unit conversion and supplies canonical text to CLI/HTTP/UI and numeric values to new writes. Preserve exact disable sentinels and reject active terms rounded to zero before PID I/O. Raw calculations, exports, previous/readback values, rollback, revert, and recovery are unrounded. Run snapshots require explicit precision; never infer it from a vendor name.
-- Result extrema are separate from hysteresis extrema. Hysteresis still resets the legacy way, so switch timing does not change. Variant B is research-only.
-- Full mode is the default, binds `127.0.0.1` by default, and has no authentication in v1. Off-loopback bind is an explicit opt-in. Browser mutations use same-host Origin/Host checks unless an explicit origin is pinned. That check is not authentication.
-- Demo mode is a server-enforced capability boundary, not an account system. It mounts health, capabilities, built-in template reads, and visitor-owned simulator history only. OPC, PID write/revert, config and template mutation, notes, drafts, preflight, OpenAPI, and Scalar are not mounted. Quotas and simulator bounds are application constants; deployment config cannot widen them. One replica and a separate database are required. Only the SHA-256 of the anonymous session token is stored.
-- `--output json` is exactly one JSON value on stdout. Logs go to the rotating file and, when a console is attached, to stderr. Never to stdout.
-- There is one HTTP transport and no client-side transport interface. Regenerate `openapi.json` and `frontend/src/api/schema.d.ts` together. Do not hand-edit generated OpenAPI, TypeScript schema, CLI reference, man pages, or completions.
-- Frontend production code must not call `window.alert`, `window.confirm`, or `window.prompt`. Use the shared `Modal` and `ConfirmModal`.
-- Release automation is fail-closed. Do not publish crates, push a tag, or create a GitHub Release unless the documented gates are open and the user explicitly approved that release. `.github/workflows/release.yml` is the only GitHub Release owner.
-- Do not commit secrets, binaries, caches, or machine-local state. Never add a `Co-authored-by: Copilot` trailer. If `.env` is absent, commit with `LEFTHOOK=0` so `ds-sync` cannot wipe the Bitwarden note.
+- Core is a pure `step` state machine using `f32`. Workspace `chrono` disables `clock`/`now`; `Utc::now()` must not compile in core. Callers supply tick time, reused by switches.
+- Simulator time advances by the configured poll interval. Live engine time is monotonic elapsed time projected onto UTC start, captured after successful PV reads, never a driver's timestamp. Replay uses recorded timestamps.
+- `Driver` has no production core dependency; tag values are strings. Rejected writes are `Ok(WriteOutcome)`; connect, operation, and unsupported errors stay distinct.
+- OPC DA uses `tokio::sync::Mutex` across awaits; simulator uses `std::sync::Mutex` without awaits. Do not unify them. Exact `Good`/`Uncertain` strings map to those qualities; everything else is `Bad`. OPC timestamps are `None`.
+- Browse uses gateway-owned sessions, opaque node keys/page tokens, and exact ItemIDs. Never infer hierarchy by splitting punctuation. Indexed search is optional; simulator/replay browse and search return `Unsupported`.
+- Closing Browse acknowledges only displayed terminal index-error notices for the exact bridge/server on the New Tune page. Preserve raw status, cached search, and diagnostics. Later attempts/accepted or observed builds re-arm notices; hidden or later errors remain unacknowledged. No browser-storage persistence.
+- Saved-tag restoration keeps the tree mounted but covered until the selected row is visible. Errors, unavailable tags, cancellation, and fallback selection must clear the shared overlay.
+- Native smoke uses only the synthetic fixture and installer-pinned official gateway, never plant equipment, production port `7600`, services, or existing COM classes. Preserve real OPCEnum; add the fixture discovery shim only when absent from both hives. User scope requires non-elevated UAC; Machine scope is explicit on a disposable host. Protect the wildcard gateway listener with its owned executable firewall block, or record the disposable hosted-CI boundary. Ownership-checked process/COM/firewall cleanup and isolated evidence are mandatory.
+- The bridge remains a crates.io dependency local to the driver. Published/packaged builds must not use git or path overrides.
+- Runtime owns shared application services; direct `clap`, HTTP-framework, and OpenAPI dependencies/types stay in adapters. Transitive gRPC transport crates must not enter runtime APIs. Neither adapter may depend on the other's application services.
+- CLI `TuneArgs` and HTTP `StartRunRequest` become runtime `ValidatedTuneRequest` before preparation. Shared defaults and finite/positive/tag-override validation belong there; Demo restrictions are additional server policy.
+- CLI `check` dispatches before writable DB bootstrap and uses only `db::open_read_only` for persisted templates. Full HTTP preflight uses its read-only template pool and shared `ReadOnlyDriver`. Neither may create history, start tune work, write/restore tags, refresh indexes, or mutate DB/controller state. Demo omits the route. Readiness cannot prove write permission.
+- SQLite is plain/unencrypted. Flatten stable filterable fields; nested evolving fields use `json_valid` JSON. Keep results and writes separate. Enum columns/CHECK literals match serde snake_case.
+- Pre-v0.1 uses one embedded schema baseline. Writable and read-only connections reject unknown migration versions/checksums before use. Preserve a verified backup and select a new file; never edit `_sqlx_migrations` or automatically delete an old DB. Use forward migrations after v0.1.
+- Startup re-upserts `builtin`/`catalog` templates without overwriting a different origin; never auto-edit `user` rows.
+- Snapshot template, tags, request, and OPC connection before mutation. Revert/recovery use that recorded connection; supplied flags are cross-checks, not overrides.
+- Every live mutation/recovery holds the canonical database's OS exclusive guard plus a conditional database/controller-MV claim. Heartbeat independently every five seconds. Stale heartbeat/PID/file presence or an in-memory registry is not recovery authority; a paused owner holding the guard blocks takeover.
+- Full startup exports evidence before retiring verified orphaned owned running tunes and setting explicit recovery eligibility; never contact controllers. Complete ownership, provenance, restore intent, and mutation evidence are required; incomplete/legacy rows fail closed. Demo bypasses live recovery.
+- `restore-loop <run-id> --yes` reports every restore step and cannot succeed with incomplete restoration or required audit persistence. If preparation provenance persistence fails, mark the owned run failed or delete it if that update fails; never leave a permanent running row.
+- Production uses `calculate_all_checked`; invalid results retain reasons and null numbers and cannot be written. Keep the fixed lower clamp, full elapsed-time period, and switch-sample result extrema. Hysteresis resets remain unchanged; Variant B is research-only and requires closed-loop simulation and an explicitly approved noncritical trial.
+- Every template/snapshot explicitly carries `pid_rounding`: 0-7 decimal places or 1-7 significant digits shared by P/I/D. Yokogawa uses one decimal; other built-ins/new custom templates use three significant digits. Runtime applies it after conversion, supplies canonical display text/numeric write targets, preserves disable sentinels, and rejects active terms rounded to zero before PID I/O. Never infer precision from vendor names. Raw math/exports, originals/readbacks, rollback, revert, and recovery are unrounded.
+- Full mode defaults to `127.0.0.1` and has no v1 authentication. Off-loopback is opt-in; same-host Origin/Host checks or an explicit origin pin are CSRF protection, not authentication.
+- Demo is a server capability boundary, not accounts. Only health/capabilities, built-in template reads, and visitor-owned simulator workflows are mounted. No OPC, PID writes/reverts, config/template mutation, notes, server drafts, preflight, OpenAPI, or Scalar. Quotas/bounds are application constants; configuration cannot widen them. Require one replica, a separate DB, exact origin/HTTPS for non-loopback access, and only SHA-256 session-token storage.
+- JSON stdout is exactly one value; logs go to rotating files and attached-console stderr, never stdout. Prompts use stderr; JSON without `--write-pid` never reads stdin.
+- One HTTP transport and one generated `openapi-fetch` client, no swappable transport interface. Regenerate OpenAPI and TS schema together. Production UI uses shared `Modal`/`ConfirmModal`, never browser alert/confirm/prompt.
+- Releases fail closed: explicit approval and documented gates precede publication/tags/releases. Only `.github/workflows/release.yml` owns GitHub Releases. Never commit secrets, binaries, caches, or local state; never add a Copilot co-author trailer. With no `.env`, commit using `LEFTHOOK=0` to protect the Bitwarden note.
 
 ## Conventions
 
-- Trunk-based flow: `main` and short-lived `<type>/<description>` branches, squash-merged. Never push or force-push to `main`, and never admin-merge.
-- Conventional Commits. User-facing docs state current behavior, not the history of a change.
-- MSRV is Rust 1.94 (`rust-version` in the root `Cargo.toml`). Edition is 2024.
-- Lint policy is `[workspace.lints]` and the "Lint policy" section in [`CONTRIBUTING.md`](CONTRIBUTING.md). Do not weaken a lint, add `NOSONAR`, or accept a finding only to clear a dashboard.
-- Do not add an unused path dependency to reserve a crate graph. Promote a dependency to `[workspace.dependencies]` when a second crate needs it.
-- `bhtune` and `bhtune-server` are peer adapters over `bhtune-runtime`; neither adapter may become the other adapter's application-service dependency.
-- Local browser testing binds `bhtune-server` to `0.0.0.0:8787` with an isolated temporary database, never the user's normal database. Rebuild and restart after a source or frontend change. Do not test a stale copied binary. Demo access off loopback requires the exact configured HTTPS origin.
-- Export affected rows before a destructive database change.
-- A non-interactive `gh` call does not source the zsh token wrapper. This repository uses the personal identity. Never print a token.
+- Short-lived `<type>/<description>` branches from current `main`, Conventional Commits, reviewed/approved squash PRs. Never push/force-push main or admin-merge; a green check is not merge approval.
+- MSRV/edition come from root `Cargo.toml`: Rust 1.94, edition 2024. Follow [Lint policy](CONTRIBUTING.md#lint-policy); never weaken it, coverage, or Sonar policy with `NOSONAR` or unjustified dispositions.
+- Reuse existing helpers. Do not reserve unused path dependencies; promote a dependency to workspace scope when a second crate needs it.
+- Local browser testing binds `0.0.0.0:8787` using isolated temporary DB/logs, never the normal user DB. Rebuild/restart after source/frontend edits; do not use a stale copied binary. Demo LAN access requires its exact HTTPS origin.
+- Export affected rows before destructive database operations. Backup/restore are library APIs; do not restore another process's open database.
+- Non-interactive `gh` does not source the zsh token wrapper. This repository uses the personal identity; never print tokens.
 
 ## Commands and gates
 
-Run the smallest command that covers the change, then every gate that change can affect.
+Run the smallest affected check, then every applicable gate in [CONTRIBUTING](CONTRIBUTING.md#ci). Optional `just` recipes reuse repository commands:
 
 ```sh
-cargo fmt --all --check
-RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-cargo deny check
-cargo machete
-cargo llvm-cov --workspace --lcov --output-path lcov.info
-pnpm --filter bhtune-frontend run format:check
-pnpm --filter bhtune-frontend run lint
-pnpm --filter bhtune-frontend run build
-pnpm run check:licenses
+just check
+just cov
+just fe
+just e2e
 pnpm run check:dead-code
 ```
 
-When the producing definitions change, regenerate and commit the output:
+`just check` covers Rust formatting, strict Clippy/rustdoc, tests, dependency checks, generated drift, and build. `just cov` must retain 100% canonical LCOV `DA` source lines. Docs-only work needs documentation gates, not Rust tests; workflow changes require `actionlint`.
 
-```sh
-cargo run -p bhtune-server --example gen_openapi
-cargo run -p bhtune --example gen_docs --features schemars
-pnpm --filter bhtune-frontend run generate:api
-```
+Regenerate producing-definition changes with `just gen` (OpenAPI, CLI/config references, man pages/completions, TS schema); never hand-edit those outputs. Use `pnpm --filter bhtune-frontend exec playwright test --list` for the actual browser inventory. OPC helpers are in `frontend/e2e/support/opcBrowser.ts`; Full excludes `demo-real.spec.ts`, Demo matches it.
 
-A documentation-only change does not need `cargo test`. A workflow change needs `actionlint`. Coverage remains 100% of canonical LCOV `DA` source lines; a docs-only change does not relax that bar for untouched Rust.
+The native fixture is outside root workspace gates. Follow [Windows native OPC DA smoke](CONTRIBUTING.md#windows-native-opc-da-smoke) for explicit MSVC x86 formatting/Clippy/tests/deny and the serial runner; do not change the ordinary GNU toolchain or product coverage exclusions. Local firewall creation/removal needs administrator permission independently of COM scope; never auto-elevate/fall back.
 
-The native smoke runner is `pwsh -NoProfile -File scripts/test-opcda-yokogawa.ps1`.
-Default User COM scope requires a non-elevated Windows shell with UAC enabled; scoped firewall
-creation/removal independently requires administrator permissions. Local reproduction uses
-explicit `-RegistrationScope Machine` on a disposable host, never automatic elevation or
-fallback. Real OPCEnum may require machine-scoped fixture categories. The runner runs the four
-standalone model/COM component tests serially, then builds the DLL with
-`+stable-x86_64-pc-windows-msvc --target i686-pc-windows-msvc` without changing the ordinary
-BHTune toolchain, and invokes
-`cargo test -p bhtune --locked --test e2e_opcda_yokogawa -- --ignored --test-threads=1`.
-Root workspace commands do not cover the fixture: run its explicit format, Windows Clippy
-with `-D warnings`, focused tests, and `cargo deny` gates as listed in
-[`CONTRIBUTING.md`](CONTRIBUTING.md#windows-native-opc-da-smoke). Product coverage exclusions
-and required status names are unchanged.
-
-SonarCloud project key: `bytehound-labs_bhtune`. Before merge, query `pullRequest=<number>` with `issueStatuses=OPEN,CONFIRMED`. After merge, wait until the `branch=main` analysis revision includes the merge commit and the same query is zero. Read `SONAR_TOKEN` from `.env` and never print it.
-
-Required status names stay `Required validation status`, `Required coverage status`, `Required E2E status`, and `Required Sonar quality status`.
-
-`pnpm --filter bhtune-frontend exec playwright test --list` reports 156 tests in 19 files. The OPC DA browser suite is 49 of those: `opc-browser-discovery.spec.ts` (7), `opc-browser-index.spec.ts` (25), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (4). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
+Sonar project is `bytehound-labs_bhtune`. Read `SONAR_TOKEN` from ignored `.env`, never print it. Before merge, query `pullRequest=<number>` with `issueStatuses=OPEN,CONFIRMED`; after merge, wait for analysis of the merge revision and verify `branch=main` is zero. Preserve required status names: `Required validation status`, `Required coverage status`, `Required E2E status`, `Required Sonar quality status`.
 
 ## Config precedence (`cli-config`)
 
-Resolution is CLI flag, then environment variable, then TOML, then the built-in default. An explicit missing path is an error. A missing auto-discovered file means all defaults. A file that exists but does not parse is always an error. The example file is [`crates/bhtune-cli/bhtune.example.toml`](crates/bhtune-cli/bhtune.example.toml). Rationale is in [`docs/internal/design/config.md`](docs/internal/design/config.md).
+CLI flag > environment > TOML > built-in default. Explicit missing paths and malformed existing files are errors; missing auto-discovered config/catalog files mean defaults. See the [example TOML](crates/bhtune-cli/bhtune.example.toml), [configuration reference](docs/reference/config.md), and [configuration design](docs/internal/design/config.md) for keys/paths.
 
-| Setting       | Flag               | Env                     | TOML             | Default                                                                 |
-| ------------- | ------------------ | ----------------------- | ---------------- | ----------------------------------------------------------------------- |
-| Database      | `--db`             | `BHTUNE_DB`             | `db`             | platform data dir `bhtune.db`                                           |
-| Gateway       | `--bridge-host`    | `BHTUNE_BRIDGE_HOST`    | `bridge_host`    | `localhost:7600`                                                        |
-| OPC server    | `--server`         |                         | `server`         | none; required for OPC DA tune and `opc`                                |
-| User catalog  | `--templates`      | `BHTUNE_TEMPLATES`      | `templates`      | platform config dir `templates.toml`; a missing default is not an error |
-| Retention     | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days` | retain forever                                                          |
-| Server mode   |                    | `BHTUNE_SERVER_MODE`    | `server_mode`    | `full`                                                                  |
-| Origin        |                    | `BHTUNE_ORIGIN`         | `origin`         | same-host check in Full when unset; required in Demo                    |
-| Trusted proxy |                    |                         | `trusted_proxy`  | none                                                                    |
-
-`allow_uncertain_quality` defaults to true. `Good` always passes, `Bad` never passes, and `Uncertain` follows the policy and logs a warning. The decision is snapshotted onto the run. `/config` edits this same TOML file. It does not create a second settings database. Saves preserve comments and unknown keys, validate, back up, and replace the file atomically. A stale revision returns `409`. A retention save does not delete history immediately.
-
-Global `[tuning]` timeouts are resolved before any driver connection or live mutation. There is no unlimited run.
+`allow_uncertain_quality` defaults true: Good passes, Bad never does, Uncertain follows policy and logs a warning. Snapshot that decision. `/config` edits the same TOML, preserving comments/unknown keys with validation, backup, and atomic replacement; stale revisions return 409. Retention saves do not delete immediately. Resolve `[tuning]` before connecting/mutating; no unlimited run.
 
 ## Automation (`cli-automation`)
 
-`tune` and `simulate` accept `--yes`, `--write-pid <aggressive|moderate|sluggish>`, and `--output table|json`. `--write-pid` requires `--yes` and is rejected before any I/O when `--yes` is absent. `simulate` accepts the write flags but skips write-back: the simulator has no PID constant tags. `check` accepts the tune inputs, `--output table|json`, `--strict`, and `--write-pid` for readiness assessment only; it never writes and does not require `--yes`. `restore-loop <run-id>` requires `--yes` and accepts `--output table|json`; connection flags only cross-check the stored provenance.
+`tune`/`simulate` accept `--yes`, `--write-pid <aggressive|moderate|sluggish>`, and `--output table|json`; reject write-back without `--yes` before I/O. Simulator skips PID write-back because it has no PID tags. `check` accepts tune inputs, output/strict, and write-readiness flags without requiring `--yes` or writing. `restore-loop` requires `--yes`.
 
-JSON mode prints one final JSON value on stdout. Prompts go to stderr. JSON mode without `--write-pid` does not read stdin. `check` exits with `0` when checks pass, `1` when it cannot run, and `8` when a check fails or strict mode rejects a warning.
-
-| Code | Name                      | Meaning                                                                                |
-| ---- | ------------------------- | -------------------------------------------------------------------------------------- |
-| 0    | `EXIT_SUCCESS`            | Completed, or write-back was skipped cleanly.                                          |
-| 1    | `EXIT_FAILURE`            | Setup or command error before a normal tune outcome.                                   |
-| 2    | `EXIT_ABORTED`            | Ctrl+C, with restore confirmed.                                                        |
-| 3    | `EXIT_WRITE_BACK_FAILED`  | The test completed and the PID write-back failed.                                      |
-| 4    | `EXIT_TIMED_OUT`          | `[tuning].timeout_secs` elapsed.                                                       |
-| 5    | `EXIT_POOR_QUALITY`       | A tuning-critical read was `Bad`, or `Uncertain` while the quality policy rejected it. |
-| 6    | `EXIT_RESTORE_INCOMPLETE` | Restore was not confirmed, including a second Ctrl+C or an incomplete `restore-loop`.  |
-| 7    | `EXIT_ACTUATION_FAILED`   | MV actuation failed and restore was confirmed.                                         |
-| 8    | `EXIT_CHECK_FAILED`       | A preflight check failed, or `--strict` rejected a warning.                            |
-
-`tune_runs.outcome` stores only `Completed`, `Aborted`, or `Failed`. A write-back failure does not rewrite an already completed row. Exit 6 outranks exit 7 when restore is incomplete.
+The [exit-code table](docs/guides/safety.md#scripting-and-exit-codes) is canonical. `check` uses 0/pass, 1/cannot run, 8/failed or strict warning. Terminal DB outcomes are Completed/Aborted/Failed; write-back failure does not rewrite a completed tune. Restore-incomplete exit 6 outranks actuation-failed exit 7.
 
 ## OPC DA integration
 
-`OpcDaDriver::connect(host, server)` passes `host:port` to `Client::connect`. The default port is 7600. The ProgID is stored on the driver and sent with every later call. Gateway info and server listing are pre-connection free functions, not `Driver` methods. Server listing returns servers registered on the gateway machine.
+`OpcDaDriver::connect(host, server)` passes host:port (default 7600) to the client and sends the stored ProgID on later calls. Gateway info and registered-server listing are pre-connection free functions, not Driver methods. The [CLI reference](docs/reference/cli.md#bhtune-opc) lists discovery, read/write, browse/search/index, and close commands. CLI browse sessions stay open until explicit close; the browser closes its session with the modal.
 
-The supported Rust dependency is the published `opcda-bridge` 0.6 line: capabilities, bounded browse pages, session close, live search, persistent indexed search, per-server auto-refresh controls, and unary read/write. CLI commands are `bhtune opc gateway-info`, `servers`, `read`, `write`, `browse`, `search`, `search-index`, and `close`. A CLI browse session stays open until `bhtune opc close <session-id>`. The browser closes its session when the modal closes. Index controls are Refresh Index, conditional Cancel Indexing, Delete Index, and persisted Enable/Disable Auto-refresh. New/recreated indexes default off; manual refresh/retry never changes that choice. The gateway has no `index.enabled`/`index.paused` override. Show a countdown only for an enabled usable index with a real next-refresh date. Disable preserves cached search and an active build; startup grace, maintenance, health, pacing, and failure backoff remain independent safeguards.
+Preserve Refresh Index, conditional Cancel Indexing, Delete Index, and persisted Enable/Disable Auto-refresh. New/recreated indexes default off; manual refresh/retry never opts in. No `index.enabled`/`index.paused` override. Countdown requires an enabled usable index with a real next date. Disable preserves cache/active builds; grace, maintenance, health, pacing, and failure backoff remain independent. See [browser guide](docs/guides/web-ui/starting-a-tune.md#opc-da-connection-and-mapping).
 
-An accepted OPC write is not proof the controller moved. The confirmation rule is in the live-plant section below.
-
-The Windows installer always installs `bhtune.exe` and `bhtune-server.exe`. It can also install a pinned, checksum-verified official 32-bit `opcda-bridge-gateway`; it never downloads a gateway at runtime. Base-installer and gateway-extension acceptance is recorded in [`docs/internal/design/windows-installer.md`](docs/internal/design/windows-installer.md). Attaching that installer to a stable release remains deferred until the coordinated release-workflow change.
-
-Release archives, the Docker image, deb/rpm packages, and the guarded AUR package ship both binaries together. The UI is browser-served, so there is no GUI toolkit to split out. See [`docs/internal/design/packaging-and-release.md`](docs/internal/design/packaging-and-release.md).
+All distribution channels remain: paired CLI/server archives, Docker, deb/rpm, AUR, Windows NSIS, and macOS launchd/Homebrew. Homebrew needs a tap and verified checksums. Optional installer gateways are pinned, checksum/provenance-verified official x86 artifacts, never runtime downloads. Follow [installation](docs/getting-started/installation.md) and [release guidance](docs/guides/releasing.md); stable installer attachment requires the coordinated release handoff.
 
 ## Live-plant safety hardening
 
-`cli-safety` covers validation, cancellation, OPC quality (`safety-quality`), and restore bounds (`safety-cancellation`). The closed finding write-up is [`docs/internal/design/safety-hardening.md`](docs/internal/design/safety-hardening.md).
+`cli-safety`, `safety-quality`, and `safety-cancellation` follow the [safety guide](docs/guides/safety.md) and [design evidence](docs/internal/design/safety-hardening.md).
 
-- Validate before any live mutation. Relay amplitude is finite and from 0.1 through 50 percent. `cycles_count` is at least 1. `mrft_delay_secs` is at most 3600. PV bounds must differ. MV bounds must be finite and ordered `low < high`. The initial MV must lie inside that range. There is no `--dry-run`. Omitting `--write-pid` is the non-writing run.
-- `--write-pid` requires `--yes` on every path, including an interactive one. Reject the combination before connection or database writes.
-- `[tuning].timeout_secs` defaults to 3600 and cannot be disabled. Ctrl+C and that timeout must reach an in-flight driver call through one process-wide `CtrlC` handle and `bounded_driver_call`, not only the idle wait between ticks. `[tuning].op_timeout_secs` caps one operation. `[tuning].restore_timeout_secs` is a separate restore budget.
-- Every exit attempts restore for steps that actually succeeded. Attempt every restore step; do not stop at the first failure. Persist mode, mode attribute, and setpoint before the first mutating write. Record `restore_status` and a detail naming each failed step.
-- A second Ctrl+C during restore, or a restore timeout, is exit 6. After the authoritative MV restore write is accepted, extend the effective deadline to at least four seconds after acceptance so confirmation cannot be cut short.
-- `Good` always passes. `Bad` never passes. `Uncertain` passes only when `allow_uncertain_quality` is enabled, and every such acceptance logs a warning. Enforce this on initial reads, the poll, and PID confirmation. Store a rejected poll sample, then abort and restore.
-- PID write-back pre-reads P, I, and D before any write. Write and verify one constant at a time. Tolerance is 0.001 absolute or 1 percent relative. Roll back only constants whose own write-and-verify succeeded. A failed rollback points the operator at `bhtune history revert <run-id>`.
-- `history revert` checks the run, OPC DA driver, write row, previous values, `--yes`, and PID tags before connecting. It uses the recorded server and bridge host. A contradicting flag is an error. A revert records the current values as its own previous values and does not nest another rollback.
-- An accepted OPC DA MV write is not actuation. Track each accepted relay or restore command in `tune_mv_actuations`. Confirm the exact target within four seconds. A matching readback that completes after the deadline is still a failure. While a relay is pending, poll PV and MV together, map by tag identity, and judge MV evidence before the engine advances. Do not issue the replacement relay after a failed confirmation. Exit 7 means actuation failed and restore was confirmed. Exit 6 still wins when restore is incomplete. Simulator and replay do not run this live check. Commanded MV remains the sample and trend series. Measured MV stays in the actuation audit, not the normal browser table.
-- Invalid calculated results are not writable. Sampling adequacy and latency summaries are advisory. They do not abort a run or block a valid write. A shared PV/MV batch can populate both PV-read and MV-verification latency categories; those durations overlap and must not be added.
-- `restore_from` takes the pool by value, checks integrity, requires an exclusivity probe, copies with `VACUUM INTO`, and replaces the file through a same-directory temporary plus rename. A busy database is `DatabaseInUse`. The probe is point-in-time, not a held lock.
-- Backup and restore stay library APIs until a command is explicitly added. Do not restore a database another process still has open.
+- Validate before mutation: finite relay amplitude 0.1-50%, count >= 1, delay <= 3600 seconds, distinct PV bounds, finite ordered MV bounds, and initial MV inside them. `tune` has no dry run: omitting `--write-pid` avoids PID constants only, not mode/MV writes. Use `check` for read-only rehearsal.
+- Whole-run timeout defaults to 3600 seconds and cannot be disabled. One process-wide `CtrlC` and `bounded_driver_call` must interrupt in-flight I/O, not just idle waits. Cap operations separately; restoration has its own budget.
+- Every exit attempts all applicable restore steps, not just the first successful one. Persist initial mode/mode attribute/applicable Auto-start setpoint before mutation; retain restore status and each failed step. A second Ctrl+C or exhausted restore budget is exit 6. An accepted authoritative MV restore extends its deadline to at least four seconds after acceptance.
+- Apply quality policy to initial reads, polling, and PID confirmation. Persist rejected poll samples before abort/restore.
+- Pre-read/persist all P/I/D before writing. Write/verify one at a time with 0.001 absolute or 1% relative tolerance. Roll back only individually confirmed constants; failed rollback points to `history revert`.
+- Before connecting, revert checks run, OPC driver, write audit, previous values, `--yes`, and PID tags. Use recorded server/bridge; contradicting flags fail. Record current values as the revert's previous values; do not nest rollback.
+- Accepted MV writes are not actuation. Audit relay/restore commands in `tune_mv_actuations`; confirm exact targets within four seconds, rejecting late matching reads. Pending relays batch PV/MV, map by tag identity, and evaluate MV before advancing MRFT. Never issue a replacement after failed confirmation. Simulator/replay omit this live check.
+- Commanded MV stays in samples/trends; measured MV stays in the actuation audit, not the normal browser table. Invalid results cannot be written; sampling/latency advice does not abort/block valid writes. Shared PV/MV latency categories overlap and must not be summed.
+- `restore_from` consumes the pool, checks integrity/exclusivity, uses `VACUUM INTO` plus same-directory temporary/rename, and returns `DatabaseInUse` for busy data. Its probe is point-in-time, not a held lock.
 
-Official gateway deployment, when explicitly requested, uses one checksum-verified GitHub artifact on every configured host. Do not substitute a local build, and do not write a tag as a release smoke test.
+Official gateway deployment needs separate authorization and the same verified GitHub artifact on every configured host, never a local substitute or tag-write smoke test.
 
 ## History explorer
 
-Retention is off unless a positive day count is configured. `history prune`, startup, and the server's periodic sweep share one cutoff. Runs with recovery state `eligible`, `running`, or `incomplete` are retained until recovery is confirmed. Startup failure is fatal. The server sweeper logs and continues.
+Retention is opt-in via positive days. Startup, `history prune`, and server sweeps share a cutoff; retain eligible/running/incomplete recovery until confirmed. Startup sweep failure is fatal; periodic sweeps log and continue. Deletion requires a terminal DB outcome with no unresolved recovery, not merely absence from the active registry.
 
-Run detail can export CSV or JSON and can delete a terminal run that has no unresolved live recovery. Delete checks the database outcome, not the in-memory active-run registry. The trend adds presentation-only initial and restored-MV points and reserves 12 poll intervals on a short run. Continuous historization and cross-run overlay are not implemented. At current data volumes, retaining history forever is safer than an unexpected auto-delete.
+CSV/JSON exports contain persisted samples. Initial/restored-MV chart points are presentation-only; short trends reserve 12 poll intervals. Continuous historization and cross-run overlays are outside v1.
 
 ## Web app architecture
 
-One HTTP API, described by OpenAPI, consumed by one generated client. There is no second transport and no swappable client interface. The release binary embeds `frontend/dist/`. `index.html` is `Cache-Control: no-cache`; content-hashed assets are immutable. A dotted missing asset is 404. A client route falls back to `index.html`. Unknown `/api/*` returns JSON 404, not the SPA shell. Live samples use server-sent events, not WebSocket. `build.rs` creates `frontend/dist/` before the embed derive runs, so a missing directory at compile time cannot permanently reject every asset.
+Release embeds `frontend/dist/`; rebuild after asset changes. `build.rs` creates the directory before embedding. HTML uses no-cache, hashed assets immutable caching, missing dotted assets 404, client routes SPA fallback, unknown `/api/*` JSON 404. Samples use SSE, not WebSocket.
 
-`bhtune-server healthcheck` is a read-only liveness probe dispatched before server startup, SCM dispatch, logging, and database bootstrap. It sends one raw HTTP/1.1 request to loopback `/api/health`, using the port from `BHTUNE_BIND > config file > default`, with a three-second overall deadline. The Docker image uses this command for its built-in health status. The probe does not check database readiness or live-plant safety.
+`bhtune-server healthcheck` dispatches before startup, SCM, logging, or DB bootstrap: one raw loopback HTTP/1.1 `/api/health` probe, port resolved from `BHTUNE_BIND > TOML > default`, three-second overall deadline. Docker uses it for liveness, not database readiness or plant safety.
 
-Write and revert use one styled review modal and name the loop, tags, and exact values. Calculated results move above the trend once they exist. Live status remains above the trend; the chart has concise PV/Commanded MV labels and a hidden screen-reader description, with no point selector or recorded-tag caption. Sampling adequacy and latency diagnostics remain recorded in CLI/API/log surfaces, not a panel on the normal run page. Genuine safety/result warnings remain visible. The normal page does not render a repeated measurement-count footer or the raw actuation table.
-
-Rationale: [`docs/internal/design/architecture-decisions.md`](docs/internal/design/architecture-decisions.md) and [`docs/internal/design/frontend.md`](docs/internal/design/frontend.md).
+Write/revert share a styled review naming loop/tags/exact values. Results appear above trend once available; live status stays above it. Keep PV/Commanded MV labels and hidden screen-reader description, no point selector/recorded-tag caption/repeated measurement footer/raw actuation table. Sampling/latency diagnostics remain CLI/API/log data; genuine safety/result warnings remain visible.
 
 ## Documentation contract
 
-A behavior change updates, in order: generated references, this file when an invariant, command, safety rule, or correctness tag changes, [`README.md`](README.md) when a new user would notice, and the prose guide for that area. Put new rationale in `docs/internal/design/` instead of pasting a diary here.
+Behavior changes update generated references, this file when invariants/commands/safety/correctness change, README when a new user would notice, and the relevant guide. Use timeless user-facing facts, not change history. Read the [correctness register](docs/internal/design/correctness-register.md) before changing math, mapping, exports, or related UX; its numbered decisions require focused coverage.
 
-The docs-drift hook warns when a session changes Rust, user-visible `frontend/src/**`, or screenshot tooling without touching a documentation surface. It is a backstop, not permission to skip the update. This file stays on that surface list.
+The paired docs-drift hook covers committed/uncommitted implementation changes and warns when no documentation surface changed. Keep this file on its surface list; it is a backstop, not permission to skip documentation.
 
-The docs agent may update narrative prose and the workflow-owned screenshot lock on a same-repository pull request. It must not edit this file. `--deny-tool 'write(AGENTS.md)'` and the post-run path check stay in place. A secrets-gated docs step must not run on a fork pull request that cannot receive the secret.
+The CI docs agent may edit narrative docs/README and the workflow may update its screenshot lock on same-repository PRs. It must not edit AGENTS or other protected paths. Preserve `--deny-tool 'write(AGENTS.md)'`, post-run path checks, and fork secret isolation.
 
 ## Documentation system
 
-Tier 1 is generated: `docs/reference/**`, OpenAPI, man pages, and completions. CI diffs it. Tier 2 is narrative prose plus the workflow-owned Web UI screenshot lock. Tier 3 is this file, which the docs agent must not edit. Release snapshot generation exists. The first stable snapshot waits for the approved release. The published site is [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/). Design and agent guardrails: [`docs/internal/design/docs-site-and-generated-docs.md`](docs/internal/design/docs-site-and-generated-docs.md).
+Generated: CLI/config references, OpenAPI, TS schema, man pages, completions. Authored reference pages such as glossary/API are not generated; the CI docs agent still treats all `docs/reference/**` as read-only. Screenshot PNGs never enter Git; the workflow owns `docs/reference/web-ui-screenshots.json`. See [contributor screenshot policy](CONTRIBUTING.md#web-ui-screenshots).
+
+Release snapshots wait for the approved stable release. The [published site](https://bytehound-labs.github.io/bhtune/) and [documentation design](docs/internal/design/docs-site-and-generated-docs.md) describe publication and ownership.
 
 ## Correctness-critical design details
 
-Condensed register. Item numbers and decision tags match [`docs/internal/design/correctness-register.md`](docs/internal/design/correctness-register.md).
+The [full register](docs/internal/design/correctness-register.md) is canonical; preserve its decisions and evidence instead of maintaining a second numbered copy here. In addition to the invariants above: process tables match `ProcessType::ALL`; CSV headers/rows share one field list; labels use the run's template snapshot; tag suffix replacement uses the final `.`, `!`, or `/` component; exports use explicit paths/stdout and logs use resolved data paths.
 
-1. **`[fixed, no flag needed]`** The MV lower clamp is the distance from the initial MV down to the floor, not an expression that adds the floor back onto the initial value.
-2. **`[fixed, no flag needed]`** Oscillation period uses full-precision elapsed milliseconds. It does not truncate to whole seconds or wrap at 24 hours. Whole-second tests do not prove this.
-3. **`[structurally impossible]`** A switch reuses the tick timestamp. `bhtune-core` cannot call `Utc::now()`.
-4. **`[structurally impossible]`** Process-type lookup tables have length 6, matching `ProcessType::ALL`.
-5. **`[preserved rule]`** A tabular export header and its rows come from one ordered field list.
-6. **`[fixed, no flag needed]`** PID unit labels follow the current process type and template. Historical result labels come from the run's template snapshot, not the mutable catalog. The React UI re-derives labels on render.
-7. **`[fixed, no flag needed]`** Tag derivation uses the active template suffix and replaces the component after the last `.`, `!`, or `/`. It does not append a hardcoded `.PV`.
-8. **`[fixed, no flag needed]`** Relay amplitude is range-checked by `LoopConfig::validate`. A blank check is not sufficient, and the legacy numeric debug codes are not accepted.
-9. **`[fixed, no flag needed]`** Exports use an explicit path or stdout. Logs use the resolved platform data directory. There is no hardcoded developer path.
-10. **`[fixed, no flag needed]`** Simulator mode is the explicit `--driver simulator` choice. No magic tag name selects it, and it does not skip restore.
-11. **`[fixed, no flag needed]`** PID type, units, and controller direction are enums, not comparisons against display strings.
-12. **`[preserved rule]`** PID is offered only for the two temperature process types. Every other process type offers P and PI. See `ProcessType::allows_pid()`.
-13. **`[preserved rule]`** Skip, count, and noise-protection defaults come from the process-type tables when the process type changes. CLI and HTTP callers may still omit them for server-side defaulting.
-14. **`[preserved rule]`** On the final MRFT step, MV snaps back to the initial value instead of taking a full relay step.
-15. **`[fixed by design in this project, not a compat concern]`** Template-snapshotted PID precision determines controller-ready display and new-write targets through one backend path. Raw math and restoration values retain their precision; the frontend does not independently round PID targets.
-16. **`[new feature, not a legacy bug]`** The live and historical PV/MV trend uses `uPlot`. Short trends reserve 12 configured poll intervals. The blank future area is intentional.
-17. **`[not applicable — feature dropped]`** There is no license or loop-locking ledger, so the legacy null-connection open bug has no equivalent path.
-18. **`[not applicable — feature dropped]`** There is no log encryption and no login gate.
-19. **`[fixed, no flag needed]`** An accepted MV write is not physical actuation. Confirmation, exit precedence, and latency overlap are in the live-plant section.
-20. **`[fixed, no flag needed]`** A base-tag change resets Custom tag mappings and custom direction or range read mappings. Fixed-value direction and range mappings stay. Omitted direction or range values hydrate as template-tag sources, not fixed values.
-21. **`[fixed, no flag needed]`** Result extrema include the switch sample and are not reset to `pv_value_ini`. Hysteresis extrema still use the legacy reset, so switching is unchanged. Variant B, which would also seed hysteresis from the switch sample, is `[research-only]`. It needs closed-loop simulation and an explicitly approved noncritical trial. No such trial is part of the current implementation.
-22. **`[fixed, no flag needed]`** A zero, negative, or non-finite amplitude, period, or converted P/I/D value is an invalid result with a reason and null numbers. Write paths reject it before connecting to a driver.
-23. **`[advisory diagnostic]`** Sampling adequacy is `adequate` at 6.0 or more samples per measured period, `marginal` below that, and `not_assessed` without a usable period. Latency summaries are advisory and do not change validity or write permission.
-24. **`[fixed, no flag needed]`** Saved OPC tag restoration keeps the tree mounted but covered until the selected row is visible. Errors, missing tags, cancellation, and fallback selection must clear that overlay. Reuse the shared loading primitives.
+Simulator selection is explicit, never a magic tag, and does not skip restore. PID/units/direction are enums; only temperature types allow PID. Process changes reset skip/count/noise defaults; the final MRFT step snaps MV to its initial value. Base-tag/template changes reset Custom mappings but preserve Fixed values; omitted direction/ranges hydrate as template sources. Sampling is adequate at >= 6 samples/period, marginal below, not assessed without a usable period. No licensing/loop-locking ledger, log encryption, or login gate.
 
 ## Design notes
 
-| Note                                                                                    | What it holds                                                  |
-| --------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| [architecture-decisions.md](docs/internal/design/architecture-decisions.md)             | Scope, driver seam, OpenAPI, SPA embedding, and SQLite rules.  |
-| [safety-hardening.md](docs/internal/design/safety-hardening.md)                         | Live-plant findings, restore, write-back, and actuation.       |
-| [correctness-register.md](docs/internal/design/correctness-register.md)                 | Full numbered register and evidence.                           |
-| [mrft-measurement.md](docs/internal/design/mrft-measurement.md)                         | Boundary correction and result validity.                       |
-| [drivers.md](docs/internal/design/drivers.md)                                           | OPC DA, simulator, and replay drivers.                         |
-| [opc-browser.md](docs/internal/design/opc-browser.md)                                   | Session-aware browse and indexed search.                       |
-| [config.md](docs/internal/design/config.md)                                             | Precedence, tuning, and quality policy.                        |
-| [cli.md](docs/internal/design/cli.md)                                                   | CLI surface and automation.                                    |
-| [logging.md](docs/internal/design/logging.md)                                           | Tracing file plus stderr-only console mirroring.               |
-| [templates.md](docs/internal/design/templates.md)                                       | Catalog, provenance, user catalog, import, export, and delete. |
-| [persistence.md](docs/internal/design/persistence.md)                                   | Schema, history, backup, and retention.                        |
-| [server-and-api.md](docs/internal/design/server-and-api.md)                             | HTTP API, tune start, and OpenAPI.                             |
-| [frontend.md](docs/internal/design/frontend.md)                                         | SPA screens, live stream, and OPC browser.                     |
-| [demo-mode.md](docs/internal/design/demo-mode.md)                                       | Public simulator Demo boundary and fixed limits.               |
-| [testing.md](docs/internal/design/testing.md)                                           | Simulator, Playwright, and release-matrix tests.               |
-| [validation-golden-replay.md](docs/internal/design/validation-golden-replay.md)         | Golden-master replay.                                          |
-| [packaging-and-release.md](docs/internal/design/packaging-and-release.md)               | Archives, Docker, deb/rpm, and AUR.                            |
-| [windows-installer.md](docs/internal/design/windows-installer.md)                       | NSIS installer and optional gateway.                           |
-| [docs-site-and-generated-docs.md](docs/internal/design/docs-site-and-generated-docs.md) | Docs site, rustdoc, and the docs agent.                        |
-| [ci-and-hardening.md](docs/internal/design/ci-and-hardening.md)                         | CI, security workflows, and API compatibility.                 |
-| [cla.md](docs/internal/design/cla.md)                                                   | CLA text and enforcement workflow.                             |
+Use the [design-note index](docs/internal/design/README.md) for rationale, the [crate graph](docs/architecture/crate-graph.md) for boundaries, and [golden replay](docs/internal/design/validation-golden-replay.md) for validation. Code/tests take precedence over prose.
 
 ## Open questions
 
-Whether site-specific DCS/PLC templates should remain shareable JSON/TOML exports in addition to the SQLite rows.
+Whether site-specific templates should remain shareable JSON/TOML exports alongside SQLite rows.

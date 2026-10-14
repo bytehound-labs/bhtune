@@ -31,7 +31,7 @@ Auto-discovered config file location (first one found wins):
 | opcda-bridge gateway  | `--bridge-host`    | `BHTUNE_BRIDGE_HOST`    | `bridge_host`    | `localhost:7600`                                                                                                                                                                                    |
 | Default OPC DA server | `--server`         | —                       | `server`         | none — must be set one way or another for `tune --driver opcda` and the `opc` subcommands                                                                                                           |
 | User template catalog | `--templates`      | `BHTUNE_TEMPLATES`      | `templates`      | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (falls back to `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error at this tier only |
-| History retention     | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days` | none — retain forever (see "Status" above for the retention sweep design)                                                                                                                           |
+| History retention     | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days` | none — retain forever; see [retention guidance](../../guides/operator-runbook.md#10-backup-restore-retention-and-export)                                                                            |
 | Server exposure mode  | —                  | `BHTUNE_SERVER_MODE`    | `server_mode`    | `full` — `demo` is the restricted, simulator-only public surface                                                                                                                                    |
 | Browser origin        | —                  | `BHTUNE_ORIGIN`         | `origin`         | automatic same-host validation in Full mode when unset; explicit exact origin when configured; Demo requires one exact configured origin                                                            |
 | Trusted proxy         | —                  | —                       | `trusted_proxy`  | none — forwarded client-IP headers are ignored unless the immediate peer matches this exact IP/CIDR                                                                                                 |
@@ -77,8 +77,9 @@ database path — not a real gap.
 ## Browser configuration page and global quality policy
 
 The browser's `/config` page edits the same `bhtune.toml` file used by the CLI and server; it
-does not create a second SQLite settings authority. It currently exposes the global
-`allow_uncertain_quality` policy and `retention_days`, while startup-only settings such as the
+does not create a second SQLite settings authority. It exposes the global
+`allow_uncertain_quality` policy, `retention_days`, and the five `[tuning]` timing/safety settings,
+while startup-only settings such as the
 database path, bind address, logging, and template-catalog path remain file/configuration
 settings rather than live UI controls.
 

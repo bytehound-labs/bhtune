@@ -178,7 +178,7 @@ callers:
   (the test itself completed, but the requested PID write-back failed — rejected write,
   failed confirmation readback, or the defensive missing-result case above), `EXIT_TIMED_OUT
 = 4` (`[tuning].timeout_secs` elapsed before the test finished), `EXIT_POOR_QUALITY = 5` (a
-  non-`Good` OPC sample aborted the run — see the OPC-quality bullet under "Live-plant safety
+  `Bad` or policy-rejected `Uncertain` OPC sample aborted the run — see the OPC-quality bullet under "Live-plant safety
   hardening" above), and `EXIT_RESTORE_INCOMPLETE = 6` (the post-run restore or an explicit
   `restore-loop` recovery could not be confirmed within `[tuning].restore_timeout_secs`, was
   cut short by a second Ctrl+C, or its required final audit could not be persisted — see

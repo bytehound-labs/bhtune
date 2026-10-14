@@ -167,7 +167,7 @@ Integration rules, as implemented in `OpcDaDriver`:
 The gateway is a separate Windows process installed with `cargo install opcda-bridge-gateway` or
 downloaded from the upstream releases page. It runs beside the OPC DA server, listens on port
 `7600` by default, and requires the firewall to allow the client-to-gateway connection. The
-0.5.0 protocol offers `ListServers`, `GetCapabilities`, paged `Browse`, `CloseBrowseSession`,
+published `opcda-bridge` 0.6 client offers `ListServers`, `GetCapabilities`, paged `Browse`, `CloseBrowseSession`,
 streaming live `Search`, persistent indexed-search status/query/refresh/control/delete operations,
 per-server automatic-refresh controls, and unary `Read`/`Write`. MRFT polling only needs the unary calls, while subscription-driven Step
 Test remains deferred until the bridge exposes a live push/subscription RPC.

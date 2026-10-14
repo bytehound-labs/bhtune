@@ -4,324 +4,108 @@ sidebar_position: 3
 
 # Web GUI quickstart
 
-`bhtune-server` is a single binary that serves both a REST + Server-Sent-Events API and the
-built React frontend — no separate Node process, reverse proxy, or Docker container required on
-the target host. This walks through running a complete tune from a browser, against the
-built-in simulator.
+`bhtune-server` serves one REST/SSE API and the built React frontend. A release binary needs no
+separate Node process or static-file server. This quickstart uses the in-process simulator,
+without an OPC gateway or plant equipment.
 
 ## Build and run
 
-```sh
-pnpm install
-pnpm --filter bhtune-frontend run build   # embeds frontend/dist/ into the server binary
-cargo run --release --bin bhtune-server
-```
-
-```text
-bhtune-server listening on http://127.0.0.1:8787
-```
-
-Open that URL in a browser. If you skip the frontend build, the server still starts and serves
-its API — every `/api/*` route works — but any other path returns a clear
-`503 the web UI has not been built yet` instead of a blank page, naming the exact command to
-run.
-
-The header's theme button switches between Catppuccin light and dark palettes. The selected palette is
-remembered by the browser.
-
-The header also shows whether the BHTune HTTP service is reachable. Its status includes
-screen-reader text and a tooltip; a healthy server indicator does not test OPC DA connectivity.
-
-For a visual tour of every Full and Demo page, see the
-[Web UI visual reference](../guides/web-ui/overview.md).
-
-### Restricted Demo mode
-
-A server configured for Demo mode exposes a simulator-only browser experience. The frontend
-loads the server capability document before it queries run history or renders mode-sensitive
-routes. That request lazily sets the host-only anonymous Demo cookie but does not create a
-database row; storage begins only when the browser starts its first accepted tune. Config, OPC
-browsing, notes, and PID write-back are absent; templates are limited to the built-in read-only
-catalog. Demo run history, detail, streaming, cancellation, export, and deletion use the same
-`/api/runs` paths as Full mode. Starting a tune sends only the normalized simulator fields shown
-by the Demo form, with a fixed safe tag, bounded simulator ranges and timing values, and
-Reverse controller action as a simple consistent default. The Demo process gain is positive and
-bounded from 0.1 through 5.0. The Demo defaults are a 0–100 PV/MV range with initial values of 50, gain 1.0,
-time constant 0.5 seconds, dead time 1 second, zero noise, relay amplitude 10%, one skipped
-cycle, two counted cycles, and zero seconds of noise protection.
-
-Demo policy limits and simulator timing are fixed application-owned values rather than public
-configuration controls; a deployment configuration may only declare the exact contract.
-Each run uses the stable **Simulator demo** identity. Demo history belongs to the anonymous browser session that created it. Another browser profile
-or private window cannot list or open those runs. The Demo form draft is stored only in that
-browser and expires 24 hours after its last edit. A usage-limit message advises waiting before
-retrying (`429`), while temporary service-capacity failures (`503`) advise retrying after a
-short pause. Full mode keeps the complete behavior described below.
-
-`bhtune-server` has no command-line flags of its own (unlike `bhtune`, it doesn't use `clap`
-yet). Every setting — including which port it binds — is resolved from a config file or
-environment variable, the same way the CLI resolves its own flags:
+From the repository root:
 
 ```sh
-BHTUNE_BIND=0.0.0.0:8080 cargo run --release --bin bhtune-server   # bind elsewhere, e.g. for LAN access
+pnpm install --frozen-lockfile
+pnpm --filter bhtune-frontend run build
+cargo run --release --locked --bin bhtune-server
 ```
 
-Binding anywhere other than `127.0.0.1` exposes the server to your network with **no
-authentication** — see [Safety](../guides/safety.md#network-exposure) before doing this outside
-a trusted, isolated OT network. Authentication is a planned, not yet shipped, feature (see the
-roadmap in the main [README](https://github.com/bytehound-labs/bhtune#readme)).
-For direct Full-mode browser access, no origin setting is required: the server compares the
-browser `Origin` with the request `Host` and effective port. Set `BHTUNE_ORIGIN` or the
-`origin` config key when a reverse proxy rewrites `Host`, or to pin the external browser origin.
-This same-host check is CSRF protection only and does not provide authentication.
+Build the frontend before the release server: `frontend/dist/` is embedded at Rust build time.
+Rebuild the server after frontend changes. Without built assets, the API remains available for
+the configured mode, while UI requests return `503` with the frontend build command.
+
+Open the reported address, `http://127.0.0.1:8787` by default. The header shows the application
+version and HTTP connection status and offers a remembered light/dark theme. A healthy header
+indicator does not verify the gateway, controller, or live tags.
+
+`bhtune-server --help` lists its global `--config PATH` option, read-only `healthcheck`, and
+Windows service commands `install`, `uninstall`, `start`, `stop`, and `status`. Binding and other
+settings use environment variables or TOML:
+
+```sh
+bhtune-server --config /path/to/bhtune.toml
+```
+
+Full mode has no v1 authentication and defaults to loopback. An off-loopback `BHTUNE_BIND` is an
+explicit network-exposure decision. Direct Full-mode browser access uses same-host Origin/Host
+checks; pin `BHTUNE_ORIGIN` or TOML `origin` when a proxy rewrites Host or one external origin is
+required. This is CSRF protection, not authentication. Read [network safety](../guides/safety.md#network-exposure)
+before exposing the service.
+
+## Run a simulator tune
+
+1. Open **New Tune** at `/runs/new` and choose **Simulator**.
+2. Review the template, process/controller type, relay settings, and simulator parameters.
+   Live-only controls are disabled; templates still determine the PID-unit/precision convention.
+3. Select **Start tune**. The run detail shows status and a streaming PV/Commanded MV trend.
+4. Wait for completion, then review the calculated results and restore outcome.
+5. Open **History** at `/runs`, select the run, and export its recorded samples as CSV or JSON.
+
+The simulator has no PID constant tags, so it does not write constants to a controller.
+**Cancel run** uses the shared abort-and-restore path; leaving the page is not cancellation.
+CLI-created runs are visible in the browser when both adapters use the same configured database.
+
+See [Starting a tune](../guides/web-ui/starting-a-tune.md) for process defaults, OPC discovery,
+arrow/label tree controls, mapping overrides, readiness checks, drafts, and index controls.
+[Runs and history](../guides/web-ui/runs-and-history.md) covers filtering, result validity,
+precision, PID review/revert, exports, duplication, and guarded deletion.
+[Templates and configuration](../guides/web-ui/templates-and-configuration.md) covers catalog
+ownership and installation-wide timing/quality/retention. The
+[end-to-end tutorial](../guides/end-to-end-tutorial.md) connects these steps to an approved live workflow.
+
+## Restricted Demo mode
+
+Demo is a separate server-enforced, simulator-only boundary, not Full mode with hidden buttons.
+It exposes built-in template reads and visitor-owned simulator history/detail/SSE/cancel/export/
+delete, but not OPC, preflight, config/template mutation, server drafts/notes, or PID write-back.
+Its anonymous cookie separates browser sessions, not user accounts; history begins with the
+first accepted run. Fixed simulator bounds, quotas, and timing cannot be widened by config.
+
+Self-host with one replica, a separate database, and the exact configured origin. Non-loopback
+browser access requires the matching HTTPS reverse proxy, not the bound HTTP port. See
+[Public simulator demo](../guides/public-simulator-demo.md) for the complete contract.
 
 ## Frontend development mode
 
-If you're changing the frontend itself, run the Vite dev server alongside a running
-`bhtune-server` instead of rebuilding on every change — Vite proxies `/api/*` requests through
-to the real server so both stay in sync:
+For hot reload with an isolated temporary database and logs:
 
 ```sh
-cargo run --bin bhtune-server &     # first, in one terminal
-pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on save
+pnpm install --frozen-lockfile
+just dev
 ```
 
-The Vite development server binds all local interfaces and allows the `asus` hostname, so a
-second host on the trusted local network can open `http://asus:5173`. Frontend edits are
-deployed through hot module reload after each save; restart `bhtune-server` after Rust or API
-changes. The proxy keeps browser API calls same-origin to the Vite page; Full mode accepts
-that development flow while continuing to reject cross-site browser mutations. The
-development server and API have no authentication, so do not expose them beyond a trusted
-network. If a proxy presents a different external host, configure `BHTUNE_ORIGIN` with the
-browser-visible origin.
-
-## Run a tune
-
-1. **Tune** (`/runs/new`) — the app's default landing page, and the first item in the header
-   nav. One form covering the per-tune settings for `bhtune tune`: connection (which driver —
-   OPC DA or the simulator), tag mapping, test parameters (process type, controller type,
-   relay amplitude, cycles), simulator parameters (gain/time constant/dead time/noise, when
-   the simulator driver is selected), and automatic PID settings. Submitting POSTs to the same
-   `/api/runs` endpoint the CLI's `bhtune-server` mode exposes — there's exactly one API,
-   used by both the browser and any script that wants to drive a run over HTTP directly.
-   Multiple tunes can run at the same time. PID writes and restores remain exclusive with
-   active tunes because they modify live controller values directly.
-   The **Start tune** and **Cancel** actions remain at the top of the page while you configure
-   the tune.
-
-   - Switching the driver to **Simulator** greys out every field the simulator genuinely
-     ignores (OPC server ProgID, bridge host, tag name, automatic PID settings, and quality
-     options) rather than hiding them, so the form doesn't reflow and the greyed field itself
-     explains what the simulator doesn't use. The template stays enabled intentionally. The
-     selected template formats calculated PID constants using that system's native conventions
-     (for example, gain versus proportional band). The simulator ignores its DCS tag mappings.
-     PV/MV ranges, controller direction, and every engine parameter also
-     stay enabled because the simulator needs them. The Simulator parameters section also
-     explains the generic FOPDT model and its exact discrete update; see the
-     [simulator model guide](../guides/simulator-model.md) for the full equations.
-   - Test parameters show concrete **Process defaults** for cycles to skip, cycles to count, and
-     noise protection based on the selected Process type. Changing Process type replaces all
-     three values; **Reset process defaults** restores those values without resetting the rest
-     of the form. These are process-type defaults rather than DCS/PLC template settings.
-   - Switching to **OPC DA** reveals a **Browse servers** button next to the ProgID field.
-     It opens an on-demand picker populated by the bridge gateway, listing every OPC DA server
-     registered on it as clickable buttons — no need to already know (or spell correctly) a
-     ProgID like `Matrikon.OPC.Simulation`. A **Browse tags** button next to the Tag name field
-     (enabled once a ProgID is entered) opens a lazily-expanding tag tree fetched one level at
-     a time from the gateway. Already-loaded levels are reused when you revisit an expanded
-     branch. Hierarchical servers such as Yokogawa CSHIS can be expanded
-     through nested controller/block levels until their PV leaves; dotted and slash-separated
-     item IDs are supported. The first node is selected automatically when the tree loads, and
-     the selection panel stays in place while browsing. The main form's collapsible **Loop
-     mapping** section is the single place to inspect the complete tag set the active template
-     derives from the selected PV and the direction/range inputs used for the tune. Each row
-     shows its effective value and source. Tag mappings use **Template tag** or **Custom tag**;
-     direction and range mappings use **Template tag**, **Custom tag**, or **Fixed value**. Switching to a
-     custom tag starts with the template-derived value; fixed direction/range values must be
-     entered explicitly. Each mapping row is a labeled group, and its source choices are exposed
-     as an accessible pressed-button set. Use a row's **Reset** button or **Reset all mapping overrides** to return to template/live
-     values. Simulator direction and ranges are kept separately from OPC fixed overrides. The
-     browser itself stays focused on browsing and testing the selected PV tag. It offers a
-     **Read selected tag** action showing a live value
-
-     and its quality. Double-clicking a browsed leaf or indexed-search result selects it; double-clicking
-     any expandable node, including a branch-and-item node, expands or collapses it. Selecting **Select tag** writes
-     the selected tag with its final component replaced by the active template's process-variable
-     suffix into the Tag name field. Changing templates likewise replaces the final component
-     with the new template's process-variable suffix, regardless of what the previous component
-     was, preserving the rest of the tag path.
-
-     For example, browsing `Area01.FIC101.OUT` with a template whose
-     `process_variable_suffix` is `PV` produces `Area01.FIC101.PV`: BHTune replaces the final
-     component after the last `.`, `!`, or `/` rather than blindly appending `.PV`.
-
-     Clicking **Select tag** performs a fresh read of the original selected item (before suffix
-     replacement) and proceeds immediately only for `Good` OPC quality; `Uncertain` or `Bad`
-     quality opens a warning with choices to select a different tag or proceed anyway. Proceeding
-     only selects the item; tune execution still applies its live-reading quality safeguards.
-     Changing the base Tag name — by editing it, selecting a browser tag, or switching templates
-     — resets every **Custom tag** selector to **Template tag** and clears custom tag values,
-     including custom direction/range read tags. **Fixed value** direction and range selections
-     and values remain unchanged.
-     The **Config** page controls whether `Uncertain` readings are accepted during tuning;
-     they are accepted by default, while `Bad` quality is always rejected.
-     Reopening the browser shows a loading status while it expands the available path to the
-     current Tag name, selects that node, and scrolls the selected row into the tree viewport.
-     The tree is revealed only after that restoration settles, while the global search controls
-     remain visible. It uses indexed breadcrumbs first
-     and then tries one bounded exact
-     live search scoped beneath a matching server-returned root node when the persistent index
-     cannot resolve the path. If no root scope is available, it uses the unscoped live search;
-     only an unavailable tag after all search attempts falls back to the root level.
-     Indexed search is an optional whole-server accelerator. A fresh gateway has no enrolled
-     servers and does not index every registered OPC DA server automatically. Use **Refresh Index**
-     in the tag browser to enroll the selected ProgID and start its first build; no gateway TOML
-     edit or restart is required. New and recreated indexes start with automatic refresh off.
-     Manual refresh or retry never changes that saved choice. Click **Enable Auto-refresh**
-     after a usable index exists to opt into the gateway's configurable seven-day schedule;
-     the choice survives browser and gateway restarts. The browser also provides **Cancel Indexing**,
-     **Disable Auto-refresh**, and **Delete Index** actions. Disabling automatic refresh keeps the existing index and
-     searchable data; deleting it shows a temporary `deleting` state while the gateway removes
-     the index and enrollment, then leaves ordinary browse,
-     direct ItemID entry, live reads, and tuning available. If indexing is not enrolled or is
-     still building, the global search field is disabled, but the lazy tag tree and other
-     operations remain available. Completed non-fatal inventory diagnostics remain available
-     through the gateway/API and diagnostic CLI; the browser shows the gateway's failure
-     diagnostic on its own line for a failed index state. `Index: ready` means the existing
-     index is usable, not that automatic refresh is running. When a usable opted-in index has a
-     reported next date, `Auto-refresh: enabled` appears with a
-     relative days-and-hours countdown and the exact scheduled time on hover. An opted-in
-     server without a usable index or active build/deletion shows
-     `Auto-refresh: waiting for the first index; run Refresh Index once`; the first build is
-     manual. A usable index without a reported date shows `Auto-refresh: not scheduled`; a
-     server that is not opted in shows `Auto-refresh: disabled` and no countdown. Disable does not
-     cancel an active build; use **Cancel Indexing** for that operation. Maintenance windows,
-     foreground/health protection, pacing, storage checks, and retry backoff still govern
-     automatic work.
-
-   - A **Notes** field records optional operator context, observations, or follow-up actions.
-     Notes are included when the run starts and can be edited or cleared from the run detail
-     page while the run is active or after it finishes.
-   - Every field except **Notes** is autosaved to the server as the app-wide New tune draft,
-     including OPC values that are temporarily inactive while **Simulator** is selected. The
-     draft follows you across browsers and machines rather than living in `localStorage`.
-     Notes are intentionally left blank after a reload so one run's operator context is not
-     copied into another. Relay amplitude is required; a missing or cleared saved value restores
-     the built-in 10% default. On an installation without a saved draft, the form quietly falls
-     back once to the newest run's settings or the built-in defaults; this normal first-use state
-     does not display an error. **Duplicate this run** takes precedence over both sources, and
-     **Reset to defaults** replaces the saved draft with the built-in defaults. Connection, Test
-     parameters, Loop mapping, Simulator parameters, and Automatic PID settings are independently
-     collapsible and open by default. Controls that do not apply to the selected driver stay
-     visible but disabled with an explanation.
-   - Installation-wide MRFT timing and safety values are managed on the **Config** page, not on
-     this form: MRFT delay, poll interval, whole-run timeout, driver-operation timeout, and
-     restore timeout. They are stored under `[tuning]` in `bhtune.toml`, apply to future tune
-     preparations, and are frozen into each run when it starts. The three process-dependent
-     defaults in **Test parameters** remain per-tune values.
-
-2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
-   in real time over Server-Sent Events (`GET /api/runs/:id/stream`), with line-only PV/MV series
-   alongside the current
-   relay switch count and cycles remaining. The initial PV/MV snapshot appears as soon as the
-   server records it, before the first MRFT sample, so the chart does not wait for a complete
-   relay tick to become visible. Independent OPC DA startup values are collected in one
-   batched read; a configured setpoint tag is read separately only when the original raw mode
-   matches the template's Auto value. That original value is saved with the initial readings
-   before any mode or MV write; non-Auto starts do not capture or write back a setpoint. Simulator
-   sample timestamps advance by the configured fixed poll step, matching the FOPDT process time
-   rather than host scheduler timing, so repeated simulator runs retain the same trend timing and
-   PID calculations across machines. Live OPC DA timestamps instead use actual monotonic elapsed
-   time projected onto the run's UTC start, making clock adjustments irrelevant without hiding
-   real scheduling or driver delays. BHTune is not a hard-real-time controller, so the host and
-   gateway still need to remain responsive. The trend ends with a terminal point at the original
-   MV after the run restores the loop. Short runs keep
-   their first point at the left edge by reserving 12 configured poll intervals of x-axis
-   horizon; unused future space stays blank until the trend is long enough to fit normally. The
-   initial-reading and restored-MV boundary markers are presentation-only and do not alter
-   persisted samples or CSV/JSON exports. A **Cancel** button stops the run early (the same
-   Ctrl+C-triggered abort-and-restore path the CLI uses — see
-   [Safety](../guides/safety.md#cancellation)). Once calculated results exist, the same page
-   promotes them directly below the heading and before the trend:
-   - The **Calculated results** panel is the primary post-tune action area. Each
-     Aggressive/Moderate/Sluggish row has a **Review & write** button that works independently
-     of any `--write-pid` choice made before the run started. The safety review modal names the
-     loop tag, response level, snapshotted parameter labels, exact destination tags, and exact
-     values before anything is sent. It opens as a centered viewport popup. Confirming an Apply
-     closes the popup immediately while BHTune writes and verifies the values in the background;
-     successful writes stay silent, while transport failures or failed physical writes/readbacks
-     appear in a page-level alert. The same popup component is used by the OPC server and tag
-     browsers.
-     When no results exist, the panel stays in its lower diagnostic position and explains that
-     no results were calculated.
-   - A mutable **Notes** field with **Save notes** and **Clear notes** actions. Notes are
-     metadata, so editing them does not interrupt an active tune.
-   - A **PID change history** table of every PID change this tune has made, each with a pre-write
-     readback, a post-write readback, and a rollback status. The newest successful write
-     shows a **Restore previous values** button that opens the same safety review modal and
-     lists the recorded pre-write values before restoring them. Confirming a restore closes the
-     popup immediately while BHTune works in the background; successful restores stay silent,
-     while transport failures or failed physical restores/readbacks appear in a page-level alert.
-
-     Both buttons are disabled — with the reason shown as text, never a silent, unexplained
-     grey button — unless the run is finished, used the OPC DA driver, has PID constant tags
-     configured, and recorded which OPC server/bridge host it connected to.
-
-   - **Export CSV**/**Export JSON** download links and a **Delete tune** button. A styled
-     confirmation dialog explains that deletion also removes the tune's recorded measurements,
-     calculated results, and PID write/audit history; deletion cannot be undone through the UI.
-   - A **Duplicate this run** button, returning to the New tune form prefilled from this run's
-     tune settings instead of the newest run's; Notes starts blank. It preserves the original
-     Template tag, Custom tag, and Fixed value mapping sources, including template-derived
-     direction and range values that were stored as null or omitted fields.
-
-   - The **Calculated results** table uses the constant names and converted values from the
-     run's snapshotted template. A Yokogawa run therefore shows `P`, `I`, and `D` instead of
-     the engine's intermediate `Kp`, `Ti`, and `Td` columns. The derivative column remains
-     visible for PI runs and shows `0`, the explicit value used to clear stale derivative action.
-     A result whose amplitude, period, or converted PID values are zero, non-finite, or otherwise
-     unusable is shown as **Invalid** with a reason and no numeric values; its calculated-result
-     write action is disabled.
-   - Run-detail sections are independently collapsible. Calculated results, Trend, Summary,
-     Notes, Test configuration, Initial readings, and PID change history start expanded so the
-     main result and PID audit information is immediately visible. Invalid results, run failures,
-     and incomplete restoration remain visible; there is no sampling-quality badge on this page.
-
-   Detailed polling timing, sampling adequacy, and MV command/readback evidence remain available
-   through `bhtune history show`, the run-detail API, and structured logs, but are not part of
-   the normal web run-detail view. CSV/JSON downloads contain the recorded samples only.
-
-3. **History** (`/runs`) — every past tune, shown by **Tag name** and filterable by outcome and
-   process type, with the same detail view available for any completed run — not just the one
-   you just started.
-4. **Templates** (`/templates`) — the four built-in DCS/PLC templates are listed on first
-   launch (seeded automatically into the database). Open one to see its full tag-suffix
-   mapping, or create a new one instead of hand-editing a TOML file.
+`just` is optional; its repository recipe builds the server, starts API/Vite, and removes its
+owned temporary state on Ctrl+C. It refuses occupied 8787/5173 ports without stopping existing
+listeners. Open `http://localhost:5173`; `/api/*` proxies to the local server. Restart after Rust/API
+changes. Other hostnames require Vite's host allowance and the exact `BHTUNE_ORIGIN`. Both
+development listeners are unauthenticated and must remain on a trusted network.
 
 ## Explore the API directly
 
-Every route is documented at `/api/docs` (an interactive Scalar UI generated from the same
-OpenAPI 3.1 spec the frontend's TypeScript client is generated from — the two can never drift
-apart), and the raw spec is at `/api/openapi.json`. A minimal health check:
+Full mode serves Scalar at `/api/docs` and its generated spec at `/api/openapi.json`; Demo omits
+both. The browser's generated TypeScript client comes from that same OpenAPI document.
+Health is available in either mode:
 
 ```sh
-curl http://127.0.0.1:8787/api/health
-# {"status":"ok","version":"<application-version>"}
+curl --fail http://127.0.0.1:8787/api/health
+bhtune-server healthcheck
 ```
 
-The web GUI displays this application version beside its connection status in the header.
-
-Starting a tune over HTTP directly (no browser) needs the same per-tune fields as the CLI's
-`tune`/`simulate` commands — see `/api/docs` for the full request schema, including the extra
-range/direction fields the simulator driver requires that a real OPC DA driver would instead
-read live from the DCS. The global `[tuning]` settings are read from the server's configuration
-when the run is prepared.
+`POST /api/runs` accepts tune inputs through the server adapter, not a CLI "server mode".
+Global `[tuning]` settings come from server configuration at preparation. API health proves HTTP
+liveness only; it does not establish database readiness, write permission, or live-plant safety.
 
 ## Next steps
 
-- [CLI quickstart](cli-quickstart.md) — the same tuning engine, scriptable for scheduled/
-  unattended runs.
-- [Safety](../guides/safety.md) — cancellation, quality enforcement, and write-back rollback,
-  all shared between the CLI and the server.
-- [Configuration](../reference/config.md) — TOML-backed global tuning, quality, and retention policies.
-- [DCS/PLC templates](../dcs-templates.md) — the tag-mapping system behind the Templates screen.
+- [CLI quickstart](cli-quickstart.md) for scripting and read-only checks.
+- [Web UI visual reference](../guides/web-ui/overview.md) for Full/Demo screenshots.
+- [Safety](../guides/safety.md) for live mutation, cancellation, verification, and recovery.
+- [Configuration reference](../reference/config.md) and [templates](../dcs-templates.md) for settings.
