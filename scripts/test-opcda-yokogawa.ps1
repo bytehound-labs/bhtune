@@ -49,7 +49,8 @@ if ($RegistrationScope -eq 'User') {
 
 $tools = @{}
 foreach ($name in @('cargo', 'rustc', 'git', 'gh', 'cosign')) {
-    $tools[$name] = (Get-Command -Name $name -CommandType Application -ErrorAction Stop).Source
+    $tools[$name] = (Get-Command -Name $name -CommandType Application -ErrorAction Stop |
+        Select-Object -First 1).Source
 }
 Import-Module -Name (Join-Path $repositoryRoot 'installer/windows/BhtuneInstaller.psm1') -ErrorAction Stop
 

@@ -8,6 +8,25 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     (Join-Path $PSScriptRoot 'test-opcda-yokogawa.ps1'), [ref]$tokens, [ref]$errors
 )
 if ($errors.Count -gt 0) { throw ($errors | Out-String) }
+$toolSetup = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
+        $node.Body.Extent.Text.Contains('$tools[$name] =')
+}, $true)
+function Get-Command {
+    [CmdletBinding()]
+    param([string]$Name, $CommandType)
+    [pscustomobject]@{ Source = "C:\first\$Name.exe" }
+    [pscustomobject]@{ Source = "C:\second\$Name.exe" }
+}
+$tools = @{}
+. ([scriptblock]::Create($toolSetup.Extent.Text))
+foreach ($name in @('cargo', 'rustc', 'git', 'gh', 'cosign')) {
+    if ($tools[$name] -isnot [string] -or $tools[$name] -cne "C:\first\$name.exe") {
+        throw "Tool discovery must select one executable in PATH order: $name"
+    }
+}
+Write-Host 'PASS multiple-PATH-tool-matches'
 $mainTry = @($ast.EndBlock.Statements | Where-Object {
     $_ -is [System.Management.Automation.Language.TryStatementAst]
 })[-1]

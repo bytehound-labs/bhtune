@@ -114,9 +114,10 @@ firewall profiles and permissions to create/remove that rule independently of CO
 Disabled firewall profiles are tolerated only on disposable GitHub-hosted plant-free VMs,
 with that boundary recorded rather than global policy changed.
 
-Run `pwsh -NoProfile -File scripts/test-opcda-yokogawa-cleanup.Tests.ps1` for four mocked
+Run `pwsh -NoProfile -File scripts/test-opcda-yokogawa-cleanup.Tests.ps1` for five mocked
 cleanup-sequencing checks: failure before COM registration, multiple owned COM keys, and
-firewall retention when process cleanup fails, plus an empty-state evidence snapshot.
+firewall retention when process cleanup fails, plus an empty-state evidence snapshot and
+single-executable selection when Windows PATH contains several matches.
 These checks perform no native operations
 and run in the required Windows job.
 
