@@ -135,7 +135,8 @@ firewall block or the disposable hosted-CI boundary.
 Cleanup removes the owned firewall rule even if setup fails before COM registration;
 an unresolved process-stop failure retains that protection.
 Native startup failures identify the failed Windows API and its error code; empty failure
-state remains exportable as evidence. Tool selection follows PATH order.
+state remains exportable as evidence. Tool selection follows PATH order; evidence records the
+effective firewall rule properties before gateway startup.
 
 See [Windows native OPC DA smoke](CONTRIBUTING.md#windows-native-opc-da-smoke) for reproduction.
 This test does not establish compatibility with CENTUM firmware, a site's namespace, remote

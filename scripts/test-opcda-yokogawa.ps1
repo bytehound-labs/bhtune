@@ -265,6 +265,7 @@ $firewall = [pscustomobject]@{
     removed = $false
     protection = 'not_established'
     profiles = @()
+    active_rule = $null
 }
 $environmentBefore = @{}
 foreach ($name in @('BHTUNE_OPCDA_SMOKE_HOST', 'BHTUNE_OPCDA_SMOKE_DIR', 'BHTUNE_OPCDA_FIXTURE_AUDIT', 'BHTUNE_OPCDA_SMOKE_GATEWAY_VERSION')) {
@@ -405,7 +406,7 @@ function Assert-SmokeFirewallRule {
             [string]$Rule.Action -ne 'Block' -or [string]$Rule.Profile -ne 'Any' -or
             ($status -notcontains 'Full' -and $status -notcontains '1') -or
             @($status | Where-Object { $_ -notin @('Full', '1', 'InactiveProfile', '5') }).Count -ne 0) {
-            throw 'The executable-scoped inbound block is not effective in the active firewall policy.'
+            throw "The executable-scoped inbound block is not effective in the active firewall policy: enabled=$($Rule.Enabled), direction=$($Rule.Direction), action=$($Rule.Action), profile=$($Rule.Profile), enforcement=$($status -join ',')."
         }
         $ports = @($Rule | Get-NetFirewallPortFilter -ErrorAction Stop)
         $addresses = @($Rule | Get-NetFirewallAddressFilter -ErrorAction Stop)
@@ -595,6 +596,14 @@ try {
         $firewall.created = $true
         $activeRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Name $firewall.name -ErrorAction Stop)
         if ($activeRules.Count -ne 1) { throw 'The owned firewall block is missing or ambiguous in active policy.' }
+        $firewall.active_rule = [ordered]@{
+            enabled = [string]$activeRules[0].Enabled
+            direction = [string]$activeRules[0].Direction
+            action = [string]$activeRules[0].Action
+            profile = [string]$activeRules[0].Profile
+            enforcement = @($activeRules[0].EnforcementStatus | ForEach-Object { [string]$_ })
+            status = [string]$activeRules[0].Status
+        }
         Assert-SmokeFirewallRule -Rule $activeRules[0] -RequireEffective
         $firewall.protection = 'owned_executable_inbound_block'
     }
