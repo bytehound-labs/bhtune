@@ -341,14 +341,33 @@ function TreeNodeRow({
         className={rowClassName}
         style={{ paddingLeft: `${depth * INDENT_PX}px` }}
       >
-        <span aria-hidden="true" className="w-4 shrink-0 text-slate-400">
-          {isBranch ? expandGlyph : ""}
-        </span>
+        {isBranch ? (
+          <button
+            type="button"
+            aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.display_name}`}
+            aria-expanded={isExpanded}
+            tabIndex={-1}
+            disabled={disabled}
+            onClick={(event) => {
+              event.stopPropagation();
+              event.currentTarget
+                .closest<HTMLElement>('[role="treeitem"]')
+                ?.focus({ preventScroll: true });
+              onActiveNodeChange(node.node_key);
+              onToggle(node);
+            }}
+            className="w-4 shrink-0 text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed"
+          >
+            <span aria-hidden="true">{expandGlyph}</span>
+          </button>
+        ) : (
+          <span aria-hidden="true" className="w-4 shrink-0" />
+        )}
         <span className="flex-1 truncate font-mono text-slate-200">
           {node.display_name}
         </span>
         {kindLabel && (
-          <span className="shrink-0 text-xs text-slate-500">{kindLabel}</span>
+          <span className="shrink-0 text-xs text-slate-400">{kindLabel}</span>
         )}
       </div>
       {isBranch && isExpanded && (

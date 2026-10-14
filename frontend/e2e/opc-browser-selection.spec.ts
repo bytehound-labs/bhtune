@@ -174,6 +174,95 @@ test.describe(OPC_BROWSER_SUITE, () => {
     expect(readTags).toEqual([originalTag, originalTag]);
   });
 
+  test("separates single-click branch disclosure from tag selection", async ({
+    page,
+  }) => {
+    const existingItemId = "Existing.PV";
+    const loopItemId = "Unit1.LIC101";
+    const readTags: string[] = [];
+    await page.getByLabel("OPC DA server ProgID").fill("Test.Server");
+    await page.getByLabel("Tag name").fill("");
+    await page.route("**/api/opc/read**", async (route) => {
+      const url = new URL(route.request().url());
+      readTags.push(url.searchParams.get("tag") ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: loopItemId,
+          value: "42.0",
+          quality: "good",
+          timestamp: null,
+        }),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      const url = new URL(route.request().url());
+      const parentNodeKey = url.searchParams.get("parent_node_key");
+      const nodes =
+        parentNodeKey === "unit"
+          ? [browseNode("loop", "LIC101", "branch_and_item", loopItemId)]
+          : parentNodeKey === "loop"
+            ? [browseNode("pv", "PV", "item", `${loopItemId}.PV`)]
+            : [
+                browseNode("existing", "Existing", "item", existingItemId),
+                browseNode("unit", "Unit1", "branch"),
+              ];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage(nodes)),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    const unitNode = page.getByRole("treeitem", { name: "Unit1", exact: true });
+    await unitNode.getByRole("button", { name: "Expand Unit1" }).click();
+    await expect(unitNode).toHaveAttribute("aria-expanded", "true");
+    const loopNode = page.getByRole("treeitem", {
+      name: "LIC101",
+      exact: true,
+    });
+    const leafNode = page.getByRole("treeitem", { name: "PV", exact: true });
+    await expect(page.getByText(`Selected: ${existingItemId}`)).toBeVisible();
+    await loopNode.getByRole("button", { name: "Expand LIC101" }).click();
+    await expect(loopNode).toHaveAttribute("aria-expanded", "true");
+    await expect(loopNode).toHaveAttribute("aria-selected", "false");
+    await expect(loopNode).toBeFocused();
+    await expect(unitNode).toHaveAttribute("aria-expanded", "true");
+    await expect(leafNode).toBeVisible();
+    await expect(leafNode.getByRole("button")).toHaveCount(0);
+    await expect(page.getByText(`Selected: ${existingItemId}`)).toBeVisible();
+
+    await loopNode.getByRole("button", { name: "Collapse LIC101" }).click();
+    await expect(loopNode).toHaveAttribute("aria-expanded", "false");
+    await expect(leafNode).toBeHidden();
+    await expect(unitNode).toHaveAttribute("aria-expanded", "true");
+    await loopNode.getByText("LIC101", { exact: true }).click();
+    await expect(loopNode).toHaveAttribute("aria-selected", "true");
+    await expect(loopNode).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByText(`Selected: ${loopItemId}`)).toBeVisible();
+    await loopNode.getByText("LIC101", { exact: true }).dblclick();
+    await expect(loopNode).toHaveAttribute("aria-expanded", "true");
+    await expect(leafNode).toBeVisible();
+
+    await loopNode.getByRole("button", { name: "Collapse LIC101" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(loopNode).toHaveAttribute("aria-expanded", "false");
+    await expect(loopNode).toBeFocused();
+    await loopNode.getByRole("button", { name: "Expand LIC101" }).focus();
+    await page.keyboard.press("Space");
+    await expect(loopNode).toHaveAttribute("aria-expanded", "true");
+    await expect(loopNode).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(loopNode).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("ArrowRight");
+    await expect(leafNode).toBeVisible();
+    await expect(page.getByText(`Selected: ${loopItemId}`)).toBeVisible();
+    await expectNoAccessibilityViolations(page);
+    expect(readTags).toEqual([]);
+  });
+
   test("loads additional pages, expands branch-and-item nodes, and closes the session", async ({
     page,
   }) => {
