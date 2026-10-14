@@ -288,12 +288,17 @@ const configSnapshot = {
   relay_amp_percent: 10,
 };
 
-const sample = (tickIndex: number, pv: number, mv: number) => ({
+const sample = (
+  tickIndex: number,
+  pv: number,
+  mv: number,
+  elapsedMs = tickIndex * 1000,
+) => ({
   tick_index: tickIndex,
   pv_quality: "good",
   sample: {
     pv,
-    time: `2025-01-01T00:00:${String(tickIndex).padStart(2, "0")}.000Z`,
+    time: new Date(Date.UTC(2025, 0, 1) + elapsedMs).toISOString(),
   },
   state: {
     counter_all_switches: tickIndex,
@@ -448,6 +453,156 @@ const completedRun = {
   ],
 };
 
+const fullCompletedRun = {
+  ...completedRun,
+  completed_at: "2025-01-01T00:00:32.264Z",
+  config: {
+    ...configSnapshot,
+    mrft_delay_secs: 0,
+    noise_protection_secs: 3,
+  },
+  initial_readings: {
+    ...initialReadings,
+    pv_ini: 175,
+    pv_range_high: 350,
+    setpoint_ini: 175,
+  },
+  notes: null,
+  restore_detail: null,
+  effective_tuning: {
+    ...completedRun.effective_tuning,
+    mrft_delay_secs: 0,
+  },
+  results: [
+    {
+      response_level: "aggressive",
+      status: "valid",
+      kp: 0.6799082,
+      ti_minutes: 0.035861094,
+      td_minutes: 0,
+      proportional: 147.07867,
+      integral: 2.1516657,
+      derivative: 0,
+      invalid_reason: null,
+      controller_values: {
+        response_level: "aggressive",
+        proportional: { value: 147.1, display: "147.1" },
+        integral: { value: 2.2, display: "2.2" },
+        derivative: { value: 0, display: "0.0" },
+      },
+      controller_target_error: null,
+    },
+    {
+      response_level: "moderate",
+      status: "valid",
+      kp: 0.4552822,
+      ti_minutes: 0.035861094,
+      td_minutes: 0,
+      proportional: 219.64398,
+      integral: 2.1516657,
+      derivative: 0,
+      invalid_reason: null,
+      controller_values: {
+        response_level: "moderate",
+        proportional: { value: 219.6, display: "219.6" },
+        integral: { value: 2.2, display: "2.2" },
+        derivative: { value: 0, display: "0.0" },
+      },
+      controller_target_error: null,
+    },
+    {
+      response_level: "sluggish",
+      status: "valid",
+      kp: 0.34070787,
+      ti_minutes: 0.035861094,
+      td_minutes: 0,
+      proportional: 293.50656,
+      integral: 2.1516657,
+      derivative: 0,
+      invalid_reason: null,
+      controller_values: {
+        response_level: "sluggish",
+        proportional: { value: 293.5, display: "293.5" },
+        integral: { value: 2.2, display: "2.2" },
+        derivative: { value: 0, display: "0.0" },
+      },
+      controller_target_error: null,
+    },
+  ],
+  writes: [
+    {
+      id: 7,
+      kind: "write",
+      response_level: "moderate",
+      written_at: "2025-01-01T00:00:35.015Z",
+      success: true,
+      error_message: null,
+      proportional_written: 219.6,
+      integral_written: 2.2,
+      derivative_written: 0,
+      proportional_readback: 219.6,
+      integral_readback: 2.2,
+      derivative_readback: 0,
+      proportional_previous: 139.1,
+      integral_previous: 2.3,
+      derivative_previous: 0,
+      rollback_state: null,
+      rollback_error: null,
+    },
+  ],
+  timing_metrics: {
+    basis: "live_monotonic",
+    requested_interval_ms: 800,
+    sample_gap_count: 18,
+    mean_sample_gap_ms: 1444.478777777778,
+    max_sample_gap_ms: 3000.164,
+    missed_poll_opportunity_count: 7,
+    measured_oscillation_period_ms: 6500.500291585922,
+    approximate_samples_per_period: 4.500239388484789,
+    sampling_adequacy: "marginal",
+    poll_latency: {
+      pv_read: { count: 19, mean_ms: 996.9438903157894, max_ms: 1010.15302 },
+      mv_write: { count: 7, mean_ms: 1004.5861864285716, max_ms: 1024.816452 },
+      mv_verification: {
+        count: 6,
+        mean_ms: 993.3692978333332,
+        max_ms: 999.325991,
+      },
+      sample_persist: {
+        count: 19,
+        mean_ms: 0.443432894736842,
+        max_ms: 0.822709,
+      },
+      tick_work: {
+        count: 19,
+        mean_ms: 1367.8787723157895,
+        max_ms: 2024.720557,
+      },
+    },
+  },
+  samples: [
+    sample(0, 175, 60, 3259),
+    sample(1, 192.5, 60, 5260),
+    sample(2, 205.62, 60, 6259),
+    sample(3, 208.9, 40, 7260),
+    sample(4, 174.92, 40, 9259),
+    sample(5, 148.72, 40, 10259),
+    sample(6, 142.17, 60, 11259),
+    sample(7, 175.13, 60, 13260),
+    sample(8, 201.28, 40, 14262),
+    sample(9, 174.44, 40, 16259),
+    sample(10, 148.6, 40, 17259),
+    sample(11, 142.14, 60, 18259),
+    sample(12, 175.12, 60, 20260),
+    sample(13, 201.27, 40, 21260),
+    sample(14, 174.44, 40, 23260),
+    sample(15, 148.6, 50, 24260),
+    sample(16, 170.76, 50, 27260),
+    sample(17, 173.94, 50, 28271),
+    sample(18, 174.73, 50, 29260),
+  ],
+};
+
 const demoCompletedRun = {
   ...completedRun,
   driver: "simulator",
@@ -559,7 +714,7 @@ const searchIndexStatus: SearchIndexStatus = {
 
 type FullFixtureState = {
   templates: typeof templates;
-  completedRun: typeof completedRun | null;
+  completedRun: typeof fullCompletedRun | null;
   liveRun: typeof liveRun;
   searchIndexStatus: typeof searchIndexStatus;
   deleteAttempts: {
@@ -572,7 +727,7 @@ type FullFixtureState = {
 function createFullFixtureState(searchIndexReady = false): FullFixtureState {
   return {
     templates: templates.map((item) => ({ ...item })),
-    completedRun: { ...completedRun },
+    completedRun: { ...fullCompletedRun },
     liveRun: { ...liveRun, id: 4243 },
     searchIndexStatus: searchIndexReady
       ? {
