@@ -400,12 +400,14 @@ function Assert-SmokeFirewallRule {
         throw 'Firewall rule executable scope changed; refusing to use or remove it.'
     }
     if ($RequireEffective) {
-        # ActiveStore may return enum labels or raw CIM values (Full=1, InactiveProfile=5).
+        # NetSecurity labels differ from the MOF names (Full=1, InactiveProfile=5).
         $status = @($Rule.EnforcementStatus | ForEach-Object { [string]$_ })
         if ([string]$Rule.Enabled -ne 'True' -or [string]$Rule.Direction -ne 'Inbound' -or
             [string]$Rule.Action -ne 'Block' -or [string]$Rule.Profile -ne 'Any' -or
-            ($status -notcontains 'Full' -and $status -notcontains '1') -or
-            @($status | Where-Object { $_ -notin @('Full', '1', 'InactiveProfile', '5') }).Count -ne 0) {
+            ($status -notcontains 'Enforced' -and $status -notcontains 'Full' -and $status -notcontains '1') -or
+            @($status | Where-Object {
+                $_ -notin @('Enforced', 'Full', '1', 'ProfileInactive', 'InactiveProfile', '5')
+            }).Count -ne 0) {
             throw "The executable-scoped inbound block is not effective in the active firewall policy: enabled=$($Rule.Enabled), direction=$($Rule.Direction), action=$($Rule.Action), profile=$($Rule.Profile), enforcement=$($status -join ',')."
         }
         $ports = @($Rule | Get-NetFirewallPortFilter -ErrorAction Stop)

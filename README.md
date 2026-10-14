@@ -130,8 +130,9 @@ write-back and restoration. Product crates remain COM-free.
 
 Preflight requires OPC discovery. The runner preserves existing OPCEnum registration or
 supplies a synthetic catalog shim from the fixture DLL when it is absent. The test client uses
-loopback and an unused high port; the official gateway's wildcard listener is protected by an owned executable
-firewall block or the disposable hosted-CI boundary.
+loopback and an unused high port; the official gateway's wildcard listener is protected by an
+owned executable firewall block or the disposable hosted-CI boundary. Firewall verification
+requires enforcement on an active profile, not merely an enabled rule.
 Cleanup removes the owned firewall rule even if setup fails before COM registration;
 an unresolved process-stop failure retains that protection.
 Native startup failures identify the failed Windows API and its error code; empty failure

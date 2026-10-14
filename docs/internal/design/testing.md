@@ -109,15 +109,19 @@ copied only after the owned processes stop. Local registration defaults to HKCU;
 hosted CI explicitly selects HKLM because elevated/UAC-disabled activation ignores HKCU.
 The pinned gateway has a wildcard listener; the test client uses only loopback. Active firewall
 protection is an owned inbound-block rule for the exact staged gateway executable, verified
-in effective policy and removed after the owned processes stop. Local runs require enabled
+in effective policy and removed after the owned processes stop. Verification recognizes
+NetSecurity's `Enforced` and `ProfileInactive` labels as well as their MOF/raw CIM equivalents;
+at least one profile must enforce the rule, and no disabled or unresolved status is accepted.
+Local runs require enabled
 firewall profiles and permissions to create/remove that rule independently of COM scope.
 Disabled firewall profiles are tolerated only on disposable GitHub-hosted plant-free VMs,
 with that boundary recorded rather than global policy changed.
 
-Run `pwsh -NoProfile -File scripts/test-opcda-yokogawa-cleanup.Tests.ps1` for five mocked
+Run `pwsh -NoProfile -File scripts/test-opcda-yokogawa-cleanup.Tests.ps1` for mocked
 cleanup-sequencing checks: failure before COM registration, multiple owned COM keys, and
 firewall retention when process cleanup fails, plus an empty-state evidence snapshot and
-single-executable selection when Windows PATH contains several matches.
+single-executable selection when Windows PATH contains several matches. Effective-policy cases
+accept native enforced/inactive labels and reject inactive-only, disabled, and optimized-out rules.
 These checks perform no native operations
 and run in the required Windows job.
 

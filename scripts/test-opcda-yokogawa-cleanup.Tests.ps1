@@ -138,6 +138,38 @@ foreach ($case in @(
     Write-Host "PASS $($case.name)"
 }
 
+function Get-NetFirewallPortFilter {
+    [CmdletBinding()]
+    param([Parameter(ValueFromPipeline)]$InputObject)
+    process { [pscustomobject]@{ Protocol = 'Any'; LocalPort = 'Any'; RemotePort = 'Any' } }
+}
+
+function Get-NetFirewallAddressFilter {
+    [CmdletBinding()]
+    param([Parameter(ValueFromPipeline)]$InputObject)
+    process { [pscustomobject]@{ LocalAddress = 'Any'; RemoteAddress = 'Any' } }
+}
+
+foreach ($case in @(
+    @{ name = 'native-enforced-firewall-labels'; status = @('ProfileInactive', 'Enforced'); effective = $true },
+    @{ name = 'inactive-only-firewall-rejected'; status = @('ProfileInactive'); effective = $false },
+    @{ name = 'disabled-profile-firewall-rejected'; status = @('Enforced', 'FirewallOffInProfile'); effective = $false },
+    @{ name = 'optimized-out-firewall-rejected'; status = @('OptimizedOut'); effective = $false }
+)) {
+    $rule = [pscustomobject]@{
+        Name = $firewall.name; Description = $firewall.owner; Enabled = 'True'
+        Direction = 'Inbound'; Action = 'Block'; Profile = 'Any'; EnforcementStatus = $case.status
+    }
+    $rejected = $false
+    try { Assert-SmokeFirewallRule -Rule $rule -RequireEffective }
+    catch {
+        if ($_.Exception.Message -notlike 'The executable-scoped inbound block is not effective*') { throw }
+        $rejected = $true
+    }
+    if ($rejected -eq $case.effective) { throw "$($case.name): incorrect effective-policy decision." }
+    Write-Host "PASS $($case.name)"
+}
+
 function Get-ChildItem {
     [CmdletBinding()]
     param([string[]]$LiteralPath, [switch]$Recurse, [switch]$Force, [switch]$File)
