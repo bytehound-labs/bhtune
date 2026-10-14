@@ -13,14 +13,14 @@ $toolSetup = $ast.Find({
     $node -is [System.Management.Automation.Language.ForEachStatementAst] -and
         $node.Body.Extent.Text.Contains('$tools[$name] =')
 }, $true)
-function Get-Command {
+function Get-SmokeTestCommand {
     [CmdletBinding()]
     param([string]$Name, $CommandType)
     [pscustomobject]@{ Source = "C:\first\$Name.exe" }
     [pscustomobject]@{ Source = "C:\second\$Name.exe" }
 }
 $tools = @{}
-. ([scriptblock]::Create($toolSetup.Extent.Text))
+. ([scriptblock]::Create($toolSetup.Extent.Text.Replace('Get-Command', 'Get-SmokeTestCommand')))
 foreach ($name in @('cargo', 'rustc', 'git', 'gh', 'cosign')) {
     if ($tools[$name] -isnot [string] -or $tools[$name] -cne "C:\first\$name.exe") {
         throw "Tool discovery must select one executable in PATH order: $name"
@@ -170,12 +170,12 @@ foreach ($case in @(
     Write-Host "PASS $($case.name)"
 }
 
-function Get-ChildItem {
+function Get-SmokeTestChildItem {
     [CmdletBinding()]
     param([string[]]$LiteralPath, [switch]$Recurse, [switch]$Force, [switch]$File)
 }
 
-function Copy-Item {
+function Copy-SmokeTestItem {
     [CmdletBinding()]
     param([string]$LiteralPath, [string]$Destination, [switch]$Recurse)
     $state.copied = $true
@@ -191,7 +191,9 @@ $allStopped = $true
 $snapshot = @($mainTry.Finally.Statements | Where-Object {
     $_ -is [System.Management.Automation.Language.TryStatementAst]
 })[0]
-. ([scriptblock]::Create($snapshot.Extent.Text))
+. ([scriptblock]::Create(
+    $snapshot.Extent.Text.Replace('Get-ChildItem', 'Get-SmokeTestChildItem').Replace('Copy-Item', 'Copy-SmokeTestItem')
+))
 if (-not $state.copied -or $cleanupErrors.Count -ne 0 -or $stateBytes -ne 0) {
     throw 'Empty state must produce a zero-size snapshot without an evidence cleanup error.'
 }

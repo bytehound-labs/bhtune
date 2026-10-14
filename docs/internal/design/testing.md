@@ -127,7 +127,8 @@ firewall retention when process cleanup fails, plus an empty-state evidence snap
 single-executable selection when Windows PATH contains several matches. Effective-policy cases
 accept native enforced/inactive labels and reject inactive-only, disabled, and optimized-out rules.
 These checks perform no native operations
-and run in the required Windows job.
+and run in the required Windows job. Extracted caller bindings use named test substitutes,
+without shadowing PowerShell's built-in cmdlets.
 
 On Windows, `pwsh -NoProfile -File scripts/test-opcda-yokogawa-process.Tests.ps1` checks the
 same native launcher with harmless `cmd.exe` children: redirected output, a bounded job stop,

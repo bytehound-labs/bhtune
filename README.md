@@ -138,6 +138,7 @@ an unresolved process-stop failure retains that protection.
 Native startup failures identify the failed Windows API and its error code; empty failure
 state remains exportable as evidence. Tool selection follows PATH order; evidence records the
 effective firewall rule properties before gateway startup.
+Mocked runner checks need no native tool execution, COM registration, or firewall changes.
 
 See [Windows native OPC DA smoke](CONTRIBUTING.md#windows-native-opc-da-smoke) for reproduction.
 This test does not establish compatibility with CENTUM firmware, a site's namespace, remote
