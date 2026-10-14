@@ -172,6 +172,16 @@ streaming live `Search`, persistent indexed-search status/query/refresh/control/
 per-server automatic-refresh controls, and unary `Read`/`Write`. MRFT polling only needs the unary calls, while subscription-driven Step
 Test remains deferred until the bridge exposes a live push/subscription RPC.
 
+The [native Windows smoke](testing.md#native-windows-opc-da-smoke) exercises the real CLI,
+`OpcDaDriver`, official checksum/provenance-verified gateway, and a synthetic x86 COM server.
+The test-only server reuses `FopdtProcess` while advancing by monotonic elapsed time, so reads
+do not accelerate the plant. COM ABI, allocations, and unsafe code remain confined to its
+standalone unpublished workspace; product crates remain COM-free. This complements fast
+mock-gRPC mapping tests without claiming remote DCOM or real vendor compatibility. Preflight
+needs OPC discovery: the fixture DLL supplies a synthetic catalog only when `OPC.ServerList.1`
+is absent. Existing real OPCEnum is preserved, and the fixture class advertises its DA2
+category. The catalog is bootstrap, not coverage of real OPCEnum.
+
 ## Simulator driver reference (`driver-simulator`)
 
 `driver-simulator` is implemented in `crates/bhtune-driver/src/simulator.rs`: an in-process

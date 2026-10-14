@@ -6,7 +6,7 @@ Agent contract for this repository. It states the current architecture, invarian
 
 BHTune is an open-source Rust PID auto-tuner for industrial DCS/PLC systems. It runs a Modified Relay Feedback Test (MRFT) against one loop and can calculate and write back PID constants. v1 adapters are the `bhtune` CLI and the browser GUI served by `bhtune-server`. There is no desktop app.
 
-OPC DA I/O uses the published `opcda-bridge` 0.6 crates.io dependency and a separate Windows gateway. This repository has no Windows/COM dependency. The MRFT engine is a pure, clock-free state machine. Dependencies are open source and enforced in CI. The license is AGPL-3.0-or-later with the CLA in [`CLA.md`](CLA.md).
+OPC DA I/O uses the published `opcda-bridge` 0.6 crates.io dependency and a separate Windows gateway. Product crates have no Windows/COM dependency. The unpublished native smoke fixture is a separate test-only x86 COM workspace. The MRFT engine is a pure, clock-free state machine. Dependencies are open source and enforced in CI. The license is AGPL-3.0-or-later with the CLA in [`CLA.md`](CLA.md).
 
 v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only replay driver. OPC UA, Modbus, Step Test, multi-loop batch tuning, and a built-in scheduler are roadmap items in [`docs/roadmap.md`](docs/roadmap.md), not v1 work. Step Test stays blocked on a live subscription RPC in `opcda-bridge`. Scheduled tuning is an external scheduler invoking the CLI.
 
@@ -14,18 +14,19 @@ v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only repl
 
 ## Crate map
 
-| Path                  | Responsibility                                                                                                                                                                                                                                                      |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bhtune-core`         | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads.                                                                                                                                                           |
-| `bhtune-driver`       | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                                                                                             |
-| `bhtune-db`           | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                                                                                            |
-| `bhtune-runtime`      | Shared configuration, database bootstrap, logging, retention, driver setup, tune orchestration and safety, live ownership/recovery, history writes/reverts, and export serialization. Its source and direct dependencies contain no CLI, HTTP, or OpenAPI concerns. |
-| `bhtune`              | CLI adapter package (`bhtune_cli` Rust library and `bhtune` binary); terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`.                                                            |
-| `bhtune-server`       | Axum HTTP/OpenAPI adapter and embedded React SPA; shared application work goes through `bhtune-runtime`, not the CLI.                                                                                                                                               |
-| `bhtune-test-support` | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not.                                                                             |
-| `frontend/`           | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                                                                                                        |
-| `website/`            | Docusaurus site. Its docs plugin reads repo-root `docs/` and excludes `docs/internal/**`.                                                                                                                                                                           |
-| `fuzz/`               | Separate Cargo workspace for parser fuzz targets. Not a product-workspace member.                                                                                                                                                                                   |
+| Path                            | Responsibility                                                                                                                                                                                                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-core`                   | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads.                                                                                                                                                           |
+| `bhtune-driver`                 | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                                                                                             |
+| `bhtune-db`                     | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                                                                                            |
+| `bhtune-runtime`                | Shared configuration, database bootstrap, logging, retention, driver setup, tune orchestration and safety, live ownership/recovery, history writes/reverts, and export serialization. Its source and direct dependencies contain no CLI, HTTP, or OpenAPI concerns. |
+| `bhtune`                        | CLI adapter package (`bhtune_cli` Rust library and `bhtune` binary); terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`.                                                            |
+| `bhtune-server`                 | Axum HTTP/OpenAPI adapter and embedded React SPA; shared application work goes through `bhtune-runtime`, not the CLI.                                                                                                                                               |
+| `bhtune-test-support`           | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not.                                                                             |
+| `frontend/`                     | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                                                                                                        |
+| `website/`                      | Docusaurus site. Its docs plugin reads repo-root `docs/` and excludes `docs/internal/**`.                                                                                                                                                                           |
+| `fuzz/`                         | Separate Cargo workspace for parser fuzz targets. Not a product-workspace member.                                                                                                                                                                                   |
+| `tests/opcda-yokogawa-fixture/` | Unpublished standalone x86 OPC DA COM DLL for plant-free Windows CLI smoke testing. Never a product dependency or release artifact.                                                                                                                                 |
 
 The server package and `[[bin]]` are both named `bhtune-server`, so tests must use `env!("CARGO_BIN_EXE_bhtune-server")`. The CLI binary is `bhtune` (`CARGO_BIN_EXE_bhtune`).
 
@@ -39,6 +40,7 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - Browse uses gateway-owned sessions, opaque node keys, and page tokens. Never split `.`, `!`, or `/` to infer hierarchy. Indexed search is optional. Simulator and replay browse/search return `Unsupported`.
 - Closing Browse acknowledges only displayed terminal index-error notices for the exact bridge/server on the New Tune page. Preserve raw status, cache, diagnostics, and search availability. Later attempts and accepted/observed builds re-arm notices; errors hidden by another panel or arriving after close remain unacknowledged. No browser-storage persistence.
 - `opcda-bridge` stays a crates.io dependency local to `bhtune-driver`. Published and packaged builds must not use a git dependency or a path override.
+- Native OPC DA smoke uses only the synthetic fixture and the official gateway pinned by the installer contract. Never register it over existing HKCU/HKLM classes, use production port `7600`, start a service, or contact plant equipment. Preserve real OPCEnum; register the fixture's unique `OPC.ServerList.1` discovery shim only when absent from both hives. User scope is the default; Machine scope requires explicit selection on a disposable test host. The gateway listener is wildcard, not loopback: protect its exact staged executable with an owned inbound firewall block, or record a disabled-firewall disposable hosted-CI boundary. Ownership-checked COM/process/firewall cleanup and isolated evidence are mandatory.
 - `bhtune-runtime` owns application services shared by the CLI and server. Keep direct `clap`, HTTP-framework, and OpenAPI dependencies and types in their respective adapters; transport crates may appear transitively through the OPC DA gRPC client.
 - CLI `TuneArgs` and HTTP `StartRunRequest` convert to runtime-owned `ValidatedTuneRequest` before preparation. Keep shared simulator defaults and common finite/positive/tag-override checks in the runtime; Demo-specific restrictions remain an additional server policy.
 - `bhtune check` and Full-mode `POST /api/runs/preflight` use the shared runtime preflight and `ReadOnlyDriver`. The CLI dispatches before `db::open` and queries persisted templates only through `db::open_read_only`; the server endpoint uses its read-only template pool. Neither may create run history, start tune work, write tags, restore a loop, refresh a namespace, or otherwise mutate database/controller state. Demo mode does not mount the HTTP route. A passing write-back-readiness result proves only that P/I/D tags are configured and readable and any template-specific prerequisites are met; it cannot prove write permission.
@@ -102,6 +104,20 @@ pnpm --filter bhtune-frontend run generate:api
 ```
 
 A documentation-only change does not need `cargo test`. A workflow change needs `actionlint`. Coverage remains 100% of canonical LCOV `DA` source lines; a docs-only change does not relax that bar for untouched Rust.
+
+The native smoke runner is `pwsh -NoProfile -File scripts/test-opcda-yokogawa.ps1`.
+Default User COM scope requires a non-elevated Windows shell with UAC enabled; scoped firewall
+creation/removal independently requires administrator permissions. Local reproduction uses
+explicit `-RegistrationScope Machine` on a disposable host, never automatic elevation or
+fallback. Real OPCEnum may require machine-scoped fixture categories. The runner runs the four
+standalone model/COM component tests serially, then builds the DLL with
+`+stable-x86_64-pc-windows-msvc --target i686-pc-windows-msvc` without changing the ordinary
+BHTune toolchain, and invokes
+`cargo test -p bhtune --locked --test e2e_opcda_yokogawa -- --ignored --test-threads=1`.
+Root workspace commands do not cover the fixture: run its explicit format, Windows Clippy
+with `-D warnings`, focused tests, and `cargo deny` gates as listed in
+[`CONTRIBUTING.md`](CONTRIBUTING.md#windows-native-opc-da-smoke). Product coverage exclusions
+and required status names are unchanged.
 
 SonarCloud project key: `bytehound-labs_bhtune`. Before merge, query `pullRequest=<number>` with `issueStatuses=OPEN,CONFIRMED`. After merge, wait until the `branch=main` analysis revision includes the merge commit and the same query is zero. Read `SONAR_TOKEN` from `.env` and never print it.
 

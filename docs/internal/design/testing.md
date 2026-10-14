@@ -74,6 +74,58 @@ design. `e2e-golden-ci` needs no dedicated workflow step: `checks.yml`'s existin
 push/PR to `main`, the same way `e2e-simulator`'s subprocess test rides the same step rather than a
 separate job.
 
+## Native Windows OPC DA smoke
+
+`scripts/test-opcda-yokogawa.ps1` runs one serial ignored Windows integration test,
+`e2e_opcda_yokogawa`, against the official x86 gateway pinned by the installer contract and the
+unpublished `tests/opcda-yokogawa-fixture/` COM DLL. The fixture reuses the public FOPDT model;
+it is not a product dependency, complete OPC server, or closed-loop PID controller.
+Before building/staging the DLL, the runner runs all four standalone component tests serially:
+two model cases and two native COM vtable/shared-state/enumerator cases. Their output and
+separate write audit are retained; the smoke audit is initialized empty before gateway startup.
+
+Preflight requires OPC discovery before its tag reads. When `OPC.ServerList.1` is absent from
+both hives, the same DLL supplies a test-only catalog at discovery CLSID
+`{65CF766F-DFDC-423E-9A67-E6FD1C1AB4F3}`. It implements `IOPCServerList`/`IEnumGUID` for the
+synthetic DA2 class only. Existing real OPCEnum registrations are preserved; the fixture class
+has the owned OPC DA 2.0 category `{63D5F432-CFE4-11D1-B2C8-0060083BA1FB}`. Evidence identifies
+the provider. Real OPCEnum may not see HKCU categories, so its use requires explicit Machine
+scope on a disposable host rather than an elevation or registration fallback.
+
+The real CLI proves read-only preflight leaves a missing database absent and writes no tags,
+traverses `SmokeTest -> FCS_TEST -> TC001` with two-item pages and explicit session closure,
+builds one manual gateway index, and compares exact indexed/browsed ItemIDs and breadcrumbs.
+It then completes one temperature/PID MRFT with the built-in Yokogawa template, checks Moderate
+P/I/D unit conversion and one-decimal targets, and verifies native write-back, actuation,
+restoration, history, and the fixture audit. Live timing uses invariant/readback assertions,
+not scheduler-sensitive numeric goldens.
+
+The runner uses isolated state, an unused high port, collision-checked explicit 32-bit COM
+registration, finite native process-tree deadlines, and ownership-verified cleanup. Gateway
+archives, executable hashes, PE identity, version, signed checksums, and release provenance
+are verified using the installer contract and exported validators. Failure evidence contains
+bounded phase outputs/logs, source/toolchain/hash/PID metadata, audit, and database snapshots
+copied only after the owned processes stop. Local registration defaults to HKCU; disposable
+hosted CI explicitly selects HKLM because elevated/UAC-disabled activation ignores HKCU.
+The pinned gateway has a wildcard listener; the test client uses only loopback. Active firewall
+protection is an owned inbound-block rule for the exact staged gateway executable, verified
+in effective policy and removed after the owned processes stop. Local runs require enabled
+firewall profiles and permissions to create/remove that rule independently of COM scope.
+Disabled firewall profiles are tolerated only on disposable GitHub-hosted plant-free VMs,
+with that boundary recorded rather than global policy changed.
+
+Run `pwsh -NoProfile -File scripts/test-opcda-yokogawa-cleanup.Tests.ps1` for three mocked
+cleanup-sequencing checks: failure before COM registration, multiple owned COM keys, and
+firewall retention when process cleanup fails. These checks perform no native operations
+and run in the required Windows job.
+
+See [Windows reproduction](../../../CONTRIBUTING.md#windows-native-opc-da-smoke).
+This exercises the native backend shared with the Web UI, not React rendering, remote DCOM,
+real OPCEnum implementation, actual CENTUM firmware, site permissions, gateway restart persistence, or indexing
+throughput. Existing Playwright and fast mock-gateway tests retain those separate boundaries.
+The existing required Windows job explicitly checks the standalone fixture's format, Clippy,
+focused tests, and dependency/licenses; product-source coverage remains 100%.
+
 ## Coverage enforcement
 
 Coverage is tracked by Codecov and enforced at **exactly 100%** via `codecov.yml` (project and

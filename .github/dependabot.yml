@@ -20,6 +20,23 @@ updates:
       - dependencies
       - rust
 
+  # The unpublished native OPC DA fixture has its own Cargo workspace and lockfile.
+  - package-ecosystem: cargo
+    directory: /tests/opcda-yokogawa-fixture
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      cargo-fixture-routine-updates:
+        update-types:
+          - "minor"
+          - "patch"
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - rust
+
   # pnpm workspace root: covers both the root package.json and frontend/package.json,
   # since they share one pnpm-lock.yaml.
   - package-ecosystem: npm

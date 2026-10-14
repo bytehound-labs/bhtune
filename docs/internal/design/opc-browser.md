@@ -186,6 +186,16 @@ happy path, since standing up a second, permanent mock gRPC service just for thi
 more than it would additionally prove. The suites also cover paged browse, branch-and-item nodes,
 exact ItemID selection, search-based reveal, session cleanup, and non-Good quality confirmation.
 
+The [native Windows smoke](testing.md#native-windows-opc-da-smoke) verifies the backend path
+shared by CLI and Web: the synthetic `SmokeTest -> FCS_TEST -> TC001` tree, twelve canonical
+`CI.Yokogawa.TC001.*` ItemIDs, two-item page draining, explicit session closure, and one manual
+index with exact-item/prefix/nonmatching queries and breadcrumbs. A fresh index remains
+auto-refresh-disabled. The official gateway talks to a native DA 2.x COM DLL rather than a
+gRPC double. This is CLI/native coverage, not an HTTP/React rendering test; Playwright remains
+responsible for tree presentation, selection, loading overlays, and UI errors.
+Preflight discovery uses an existing OPCEnum or a fixture-only catalog shim when it is absent;
+this bootstrap does not claim real OPCEnum or remote DCOM coverage.
+
 ## Per-tune OPC tag overrides
 
 `TagOverrides` carries optional replacements for the template-derived process-variable,
