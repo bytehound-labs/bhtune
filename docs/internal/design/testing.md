@@ -114,10 +114,17 @@ firewall profiles and permissions to create/remove that rule independently of CO
 Disabled firewall profiles are tolerated only on disposable GitHub-hosted plant-free VMs,
 with that boundary recorded rather than global policy changed.
 
-Run `pwsh -NoProfile -File scripts/test-opcda-yokogawa-cleanup.Tests.ps1` for three mocked
+Run `pwsh -NoProfile -File scripts/test-opcda-yokogawa-cleanup.Tests.ps1` for four mocked
 cleanup-sequencing checks: failure before COM registration, multiple owned COM keys, and
-firewall retention when process cleanup fails. These checks perform no native operations
+firewall retention when process cleanup fails, plus an empty-state evidence snapshot.
+These checks perform no native operations
 and run in the required Windows job.
+
+On Windows, `pwsh -NoProfile -File scripts/test-opcda-yokogawa-process.Tests.ps1` checks the
+same native launcher with harmless `cmd.exe` children: redirected output, a bounded job stop,
+and a missing-executable diagnostic. Only unique checkout-owned scratch files are created;
+no COM, gateway, firewall, or product state is changed. Failed Windows calls report their
+API name and numeric error code.
 
 See [Windows reproduction](../../../CONTRIBUTING.md#windows-native-opc-da-smoke).
 This exercises the native backend shared with the Web UI, not React rendering, remote DCOM,

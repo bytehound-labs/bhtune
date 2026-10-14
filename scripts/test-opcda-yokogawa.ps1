@@ -133,10 +133,15 @@ public sealed class BhtuneSmokeProcess : IDisposable
     public uint Id { get; private set; }
     public string CommandLine { get; private set; }
 
-    static void Check(bool success) {
-        if (!success) throw new Win32Exception(Marshal.GetLastWin32Error());
+    static void Check(bool success, string operation) {
+        if (!success) {
+            int error = Marshal.GetLastWin32Error();
+            throw new Win32Exception(error, operation + " failed (Win32 " + error + "): " +
+                new Win32Exception(error).Message);
+        }
     }
     static string Quote(string value) {
+        if (value.Length != 0 && !Regex.IsMatch(value, "[\\s\"]")) return value;
         return "\"" + Regex.Replace(Regex.Replace(value, "(\\\\*)\"", "$1$1\\\""), "(\\\\+)$", "$1$1") + "\"";
     }
     public static RegistryKey CreateRegistry32Key(RegistryHive hive, string path) {
@@ -146,7 +151,8 @@ public sealed class BhtuneSmokeProcess : IDisposable
             IntPtr.Zero, out handle, out disposition);
         if (error != 0) {
             if (handle != null) handle.Dispose();
-            throw new Win32Exception(error);
+            throw new Win32Exception(error, "RegCreateKeyExW(" + hive + "\\" + path +
+                ") failed (Win32 " + error + "): " + new Win32Exception(error).Message);
         }
         if (disposition != 1) {
             handle.Dispose();
@@ -159,15 +165,18 @@ public sealed class BhtuneSmokeProcess : IDisposable
         IntPtr input = IntPtr.Zero, output = IntPtr.Zero, error = IntPtr.Zero, thread = IntPtr.Zero;
         try {
             child.job = CreateJobObjectW(IntPtr.Zero, null);
-            Check(child.job != IntPtr.Zero);
+            Check(child.job != IntPtr.Zero, "CreateJobObjectW");
             var limits = new ExtendedLimits();
             limits.Basic.Flags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE; no breakaway.
-            Check(SetInformationJobObject(child.job, 9, ref limits, Marshal.SizeOf<ExtendedLimits>()));
+            Check(SetInformationJobObject(child.job, 9, ref limits, Marshal.SizeOf<ExtendedLimits>()),
+                "SetInformationJobObject");
             var attributes = new SecurityAttributes { Length = Marshal.SizeOf<SecurityAttributes>(), Inherit = 1 };
             input = CreateFileW("NUL", 0x80000000, 3, ref attributes, 3, 0, IntPtr.Zero);
+            Check(input != new IntPtr(-1), "CreateFileW(stdin NUL)");
             output = CreateFileW(stdout, 0x40000000, 1, ref attributes, 2, 0, IntPtr.Zero);
+            Check(output != new IntPtr(-1), "CreateFileW(stdout " + stdout + ")");
             error = CreateFileW(stderr, 0x40000000, 1, ref attributes, 2, 0, IntPtr.Zero);
-            Check(input != new IntPtr(-1) && output != new IntPtr(-1) && error != new IntPtr(-1));
+            Check(error != new IntPtr(-1), "CreateFileW(stderr " + stderr + ")");
             child.CommandLine = Quote(file);
             foreach (string argument in arguments) child.CommandLine += " " + Quote(argument);
             var startup = new StartupInfo {
@@ -175,19 +184,24 @@ public sealed class BhtuneSmokeProcess : IDisposable
             };
             ProcessInfo created;
             Check(CreateProcessW(file, new StringBuilder(child.CommandLine), IntPtr.Zero, IntPtr.Zero, true,
-                0x08000004, IntPtr.Zero, directory, ref startup, out created)); // NO_WINDOW | SUSPENDED.
+                0x08000004, IntPtr.Zero, directory, ref startup, out created),
+                "CreateProcessW(executable " + file + ", directory " + directory +
+                ", command " + child.CommandLine + ")"); // NO_WINDOW | SUSPENDED.
             child.process = created.Process;
             child.Id = created.Id;
             thread = created.Thread;
-            Check(AssignProcessToJobObject(child.job, child.process));
-            Check(ResumeThread(thread) != UInt32.MaxValue);
+            Check(AssignProcessToJobObject(child.job, child.process), "AssignProcessToJobObject");
+            Check(ResumeThread(thread) != UInt32.MaxValue, "ResumeThread");
             return child;
-        } catch {
+        } catch (Exception launchError) {
             if (child.process != IntPtr.Zero) {
                 TerminateProcess(child.process, 1);
                 WaitForSingleObject(child.process, 10000);
             }
-            child.Dispose();
+            try { child.Dispose(); }
+            catch (Exception cleanupError) {
+                throw new AggregateException("Native process launch and cleanup failed.", launchError, cleanupError);
+            }
             throw;
         } finally {
             foreach (IntPtr handle in new[] { input, output, error, thread })
@@ -196,20 +210,22 @@ public sealed class BhtuneSmokeProcess : IDisposable
     }
     public bool Wait(int milliseconds) {
         uint result = WaitForSingleObject(process, (uint)milliseconds);
-        Check(result != UInt32.MaxValue);
+        Check(result != UInt32.MaxValue, "WaitForSingleObject");
         return result == 0;
     }
     public uint ExitCode {
-        get { uint code; Check(GetExitCodeProcess(process, out code)); return code; }
+        get { uint code; Check(GetExitCodeProcess(process, out code), "GetExitCodeProcess"); return code; }
     }
     public void Stop() {
         if (job == IntPtr.Zero) return;
         Accounting info;
-        Check(QueryInformationJobObject(job, 1, out info, Marshal.SizeOf<Accounting>(), IntPtr.Zero));
-        if (info.ActiveProcesses != 0) Check(TerminateJobObject(job, 1));
+        Check(QueryInformationJobObject(job, 1, out info, Marshal.SizeOf<Accounting>(), IntPtr.Zero),
+            "QueryInformationJobObject");
+        if (info.ActiveProcesses != 0) Check(TerminateJobObject(job, 1), "TerminateJobObject");
         var deadline = Stopwatch.StartNew();
         do {
-            Check(QueryInformationJobObject(job, 1, out info, Marshal.SizeOf<Accounting>(), IntPtr.Zero));
+            Check(QueryInformationJobObject(job, 1, out info, Marshal.SizeOf<Accounting>(), IntPtr.Zero),
+                "QueryInformationJobObject");
             if (info.ActiveProcesses == 0) {
                 if (process != IntPtr.Zero && !Wait(10000)) throw new TimeoutException("Owned root process was not reaped.");
                 return;
@@ -791,7 +807,11 @@ database_path = "$indexPath"
                 $evidence.truncated_logs.Add($file.Name)
             }
         }
-        if ((Get-ChildItem -LiteralPath $stateRoot -Recurse -File | Measure-Object -Property Length -Sum).Sum -gt 64MB) {
+        $stateBytes = 0L
+        foreach ($file in Get-ChildItem -LiteralPath $stateRoot -Recurse -File) {
+            $stateBytes += $file.Length
+        }
+        if ($stateBytes -gt 64MB) {
             throw 'Owned smoke state exceeds the 64 MiB evidence bound.'
         }
         Copy-Item -LiteralPath $stateRoot -Destination (Join-Path $evidenceRoot 'state') -Recurse

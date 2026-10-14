@@ -245,6 +245,7 @@ jobs:
             throw "PowerShell parser rejected the native smoke runner: $($errors | Out-String)"
           }
           ./scripts/test-opcda-yokogawa-cleanup.Tests.ps1
+          ./scripts/test-opcda-yokogawa-process.Tests.ps1
 
       - name: Install standalone fixture x86 MSVC toolchain
         run: rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt --component clippy --target i686-pc-windows-msvc

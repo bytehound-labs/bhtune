@@ -118,3 +118,30 @@ foreach ($case in @(
     }
     Write-Host "PASS $($case.name)"
 }
+
+function Get-ChildItem {
+    [CmdletBinding()]
+    param([string[]]$LiteralPath, [switch]$Recurse, [switch]$Force, [switch]$File)
+}
+
+function Copy-Item {
+    [CmdletBinding()]
+    param([string]$LiteralPath, [string]$Destination, [switch]$Recurse)
+    $state.copied = $true
+}
+
+$state = @{ copied = $false }
+$stateRoot = 'mock-empty-state'
+$commandLogs = 'mock-command-logs'
+$evidenceRoot = 'mock-evidence'
+$evidence = @{ truncated_logs = [Collections.Generic.List[string]]::new() }
+$cleanupErrors.Clear()
+$allStopped = $true
+$snapshot = @($mainTry.Finally.Statements | Where-Object {
+    $_ -is [System.Management.Automation.Language.TryStatementAst]
+})[0]
+. ([scriptblock]::Create($snapshot.Extent.Text))
+if (-not $state.copied -or $cleanupErrors.Count -ne 0 -or $stateBytes -ne 0) {
+    throw 'Empty state must produce a zero-size snapshot without an evidence cleanup error.'
+}
+Write-Host 'PASS empty-state-snapshot'
