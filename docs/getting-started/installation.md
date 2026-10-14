@@ -462,6 +462,12 @@ binary/service upgrade but does not claim to back up or roll back the external d
 Gateway configuration, index database and sidecars, build metadata, logs, and evidence remain
 inside the installer rollback boundary regardless of the BHTune database location.
 
+Rollback capture rejects reparse points and rechecks each source before copying; a redirected
+path must not broaden the backup or replacement boundary. Installer/uninstaller helpers form
+one complete module payload: private-file paths come from its manifest, unexpected or missing
+files fail closed, and each copied module file is SHA-256 checked. Keep those helpers with
+their matching installer rather than replacing individual scripts during recovery.
+
 The external database is opened by the installed service as `NT AUTHORITY\LocalService`, not
 by the elevated installer account. The database file's parent directory and the database file
 itself therefore need to grant that account enough access to read and update SQLite state and

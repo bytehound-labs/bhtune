@@ -309,9 +309,8 @@ impl MrftEngine {
     /// instead of taking a full relay step on the final switch). Returns the new MV value to
     /// write.
     ///
-    /// Pure port of `MRFTperformSwitch`, with the wall-clock re-read bug structurally
-    /// impossible here: this reuses `tick.time`, the same timestamp `switch_is_needed` just
-    /// reasoned about, rather than reading a fresh clock value.
+    /// Reuses `tick.time`, the same timestamp `switch_is_needed` just reasoned about,
+    /// rather than reading a fresh clock value during the switch.
     fn perform_switch(&mut self, tick: Tick) -> f32 {
         self.time_previous_switch = tick.time;
 

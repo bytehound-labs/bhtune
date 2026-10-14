@@ -11,14 +11,15 @@
 //!   semantics, and the enums that model PID parameter types and controller
 //!   direction.
 //!
-//! Deliberately has no I/O, no async, and no clock reads (`chrono`'s `clock`/`now`
-//! features are disabled workspace-wide, so `Utc::now()` cannot even compile here. This is
-//! a narrower rule than "no dependencies": `toml` is a real dependency because parsing an
+//! Deliberately has no I/O, no async, and no clock reads. Callers supply time as `Tick` data;
+//! this source/API contract is not enforced by Cargo feature isolation, since application
+//! dependencies can enable chrono's clock features through unification. This is a narrower
+//! rule than "no dependencies": `toml` is a real dependency because parsing an
 //! `include_str!`-embedded `&'static str` is not I/O; the optional, feature-gated `utoipa`
 //! dependency is similarly limited to compile-time derives that describe a type's shape.
 //! Anything added here must be justified by the pure domain logic itself (or, for `utoipa`,
 //! by describing it accurately to a consumer), not by a consumer's I/O or presentation needs
-//! — those belong in `bhtune-driver`, `bhtune-db`, the `bhtune` package, or `bhtune-server`.
+//! — those belong in `bhtune-driver`, `bhtune-db`, `bhtune-runtime`, or the CLI/server adapters.
 
 #![cfg_attr(
     test,

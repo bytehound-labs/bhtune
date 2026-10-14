@@ -1,9 +1,9 @@
 name: Docker image
 
 # Builds the multi-stage Dockerfile (frontend build -> cargo build -> slim runtime; see
-# docs/internal/design/packaging-and-release.md) and publishes it to
+# docs/architecture/packaging.md) and publishes it to
 # ghcr.io/bytehound-labs/bhtune. This is a *secondary* distribution channel for
-# IT-managed Linux hosts -- the Windows MSI installer (pkg-windows-installer) is the
+# IT-managed Linux hosts -- the Windows NSIS installer is the
 # primary path, since OT sites frequently prohibit or simply lack container runtimes.
 #
 # Every trigger builds the image, so a broken Dockerfile fails CI on the PR that broke it

@@ -25,11 +25,11 @@ gateway can actually serve.
 
 ## Results
 
-| Result | Live tune, write, or revert | Inspection |
-| --- | --- | --- |
-| Full | Proceeds | Uses every supported feature |
-| Partial | Proceeds, with a warning | Degrades the features that do not overlap |
-| Unknown | Proceeds, with a warning | Reports that the gateway protocol was not verified |
+| Result       | Live tune, write, or revert    | Inspection                                            |
+| ------------ | ------------------------------ | ----------------------------------------------------- |
+| Full         | Proceeds                       | Uses every supported feature                          |
+| Partial      | Proceeds, with a warning       | Degrades the features that do not overlap             |
+| Unknown      | Proceeds, with a warning       | Reports that the gateway protocol was not verified    |
 | Incompatible | Refused before any loop change | Still returns a result instead of failing the request |
 
 An incompatible result names the gateway version, the client version, and the protocol ranges
@@ -54,3 +54,26 @@ write or revert returns an error and does not insert a PID change row.
 The snapshot records the client version, the gateway version when the gateway reported one, where
 the metadata came from, the overall status, and the per-feature ranges. It is part of the run's
 history, so a later gateway upgrade does not rewrite what was true when the run started.
+
+## Browse and search contract
+
+Browse uses gateway-owned sessions, opaque node keys, bounded pages, and continuation tokens.
+Keep exact ItemIDs separate from hierarchy keys; punctuation in a tag is not a parent/child
+delimiter. CLI sessions stay open until `bhtune opc close <session-id>`; the browser closes
+its session when Browse closes.
+
+Indexed search is optional and capability-gated. Its absence never blocks tree browsing,
+manual tag mapping, or direct reads. An unavailable index does not silently trigger a slow
+live search; live search remains an explicit operation.
+
+The browser exposes Refresh Index, conditional Cancel Indexing, Delete Index, and persisted
+Enable/Disable Auto-refresh. New or recreated indexes default to auto-refresh **off**.
+A manual refresh/retry does not opt in, and disabling auto-refresh preserves cached search and
+an active build. There is no `index.enabled`/`index.paused` configuration override.
+Show a countdown only for an enabled usable index with an actual next-refresh date; startup
+grace, maintenance windows, health checks, pacing, and failure backoff remain independent.
+
+The browser acknowledges only terminal index-error notices actually displayed for that exact
+connection. Closing Browse does not clear raw gateway status, diagnostics, cached search, or
+future failures. See the [OPC form workflow](web-ui/starting-a-tune.md#opc-da-connection-and-mapping)
+and [frontend state model](../architecture/frontend.md#opc-navigation).
