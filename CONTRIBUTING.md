@@ -206,6 +206,11 @@ and validation rules rather than treating "latest" as an unconditional upgrade p
 ## Testing
 
 - Unit-test domain logic with `cargo test --workspace`.
+- Large unit-test suites use `#[cfg(test)] mod tests;`. Both `foo.rs` and `foo/mod.rs`
+  use `foo/tests.rs`. Nested test modules keep their names in
+  `foo/tests/<module>.rs`, preserving private parent access and existing test filters.
+  File-only test refactors must preserve the `cargo test --workspace --locked -- --list`
+  inventory and canonical source-line coverage.
 - Frontend helper and component unit tests use Vitest with jsdom:
   `pnpm --filter bhtune-frontend run test`.
 - `bhtune-core` (the MRFT engine and tuning math) must stay a pure, I/O-free state machine so it

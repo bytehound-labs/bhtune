@@ -40,6 +40,9 @@ supported installs. See the [installation guide](docs/getting-started/installati
 source-build instructions, supported distribution details, Windows installer diagnostics, and
 recovery.
 
+Source-build checks and the Rust test layout are covered in the
+[contributor guide](CONTRIBUTING.md#testing).
+
 Release packaging includes platform archives, Debian/RPM packages, AUR, Docker, and the Windows
 installer. macOS packaging includes a launchd job and a Homebrew formula template that requires
 a tap and verified stable-release checksums before installation.

@@ -3,6 +3,18 @@
 Design notes preserved from the former monolithic `AGENTS.md`. Code and tests are authoritative; see
 the [design notes index](README.md) for provenance.
 
+## Rust unit-test layout
+
+Large unit-test suites are external child modules declared with `#[cfg(test)] mod tests;`.
+Both `foo.rs` and `foo/mod.rs` use `foo/tests.rs`; an existing nested module lives at
+`foo/tests/<module>.rs`. Separate suites such as the OPC DA driver's `smoke_tests` retain their
+module names and private parent access. Test fixtures and assertions stay in their original
+module hierarchy rather than becoming integration tests or shared production helpers.
+
+For a file-only extraction, compare the complete `cargo test --workspace --locked -- --list`
+inventory before and after the move, preserve literal fixture contents, and retain the exact
+canonical source-line coverage gate below.
+
 ## Playwright end-to-end suite
 
 A Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA served by
